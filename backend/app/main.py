@@ -7,15 +7,18 @@ try:
     from app.parser import extract_text
     from app.detector import detect_ai_content, detect_ai_content_advanced
     from app.rewriter import rewrite_text, rewrite_text_with_context
+    from app.structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
 except ImportError:
     try:
         from .parser import extract_text
         from .detector import detect_ai_content, detect_ai_content_advanced
         from .rewriter import rewrite_text, rewrite_text_with_context
+        from .structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content, detect_ai_content_advanced
         from rewriter import rewrite_text, rewrite_text_with_context
+        from structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -46,6 +49,25 @@ class SelectiveParagraph(BaseModel):
 
 class SelectiveRewritePayload(BaseModel):
     paragraphs: List[SelectiveParagraph]
+    level: str = "medium"
+
+class SectionInfo(BaseModel):
+    id: str
+    title: str
+    level: int
+    start_index: int
+    end_index: int
+    content: str
+    ai_score: Optional[float] = None
+    degraded: bool = False
+    standard_type: Optional[str] = None
+
+class AnalyzeStructurePayload(BaseModel):
+    text: str
+
+class RewriteChapterPayload(BaseModel):
+    full_text: str
+    section: dict
     level: str = "medium"
 
 
@@ -233,6 +255,58 @@ async def detect_file(file: UploadFile = File(...)):
         "filename": file.filename,
         "text": text,
         **result
+    }
+
+@app.post("/api/analyze-structure")
+async def analyze_structure(payload: AnalyzeStructurePayload):
+    if not payload.text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    result = analyze_and_score_sections(payload.text, detect_ai_content)
+    return result
+
+@app.post("/api/analyze-file-structure")
+async def analyze_file_structure(file: UploadFile = File(...)):
+    content = await file.read()
+    try:
+        text = extract_text(content, file.filename)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    structure_result = analyze_and_score_sections(text, detect_ai_content)
+    try:
+        overall_result = detect_ai_content(text)
+    except Exception:
+        overall_result = None
+    
+    return {
+        "filename": file.filename,
+        "text": text,
+        "structure": structure_result,
+        "overall_detection": overall_result
+    }
+
+@app.post("/api/rewrite-chapter")
+async def rewrite_chapter(payload: RewriteChapterPayload):
+    if not payload.full_text or not payload.section:
+        raise HTTPException(status_code=400, detail="Full text and section are required")
+    
+    new_full_text, updated_section, offset = rewrite_section_content(
+        payload.full_text,
+        payload.section,
+        rewrite_text,
+        payload.level
+    )
+    
+    try:
+        detection_after = detect_ai_content(updated_section["content"])
+    except Exception:
+        detection_after = None
+    
+    return {
+        "new_full_text": new_full_text,
+        "updated_section": updated_section,
+        "index_offset": offset,
+        "section_detection_after": detection_after
     }
 
 if __name__ == "__main__":

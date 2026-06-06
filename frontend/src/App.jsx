@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
@@ -7,6 +7,8 @@ import { buildParagraphsFromText, applyRecommendations } from './utils/paragraph
 import SelectiveParagraphCard from './components/SelectiveParagraphCard';
 import ResultParagraphCard from './components/ResultParagraphCard';
 import VirtualList from './components/VirtualList';
+import PaperStructureTree from './components/PaperStructureTree';
+import SectionContentViewer from './components/SectionContentViewer';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -455,6 +457,13 @@ function App() {
   const [dragIndex, setDragIndex] = useState(null);
   const [showOriginalForParagraph, setShowOriginalForParagraph] = useState({});
 
+  const [structureMode, setStructureMode] = useState(false);
+  const [structureResult, setStructureResult] = useState(null);
+  const [selectedSectionId, setSelectedSectionId] = useState(null);
+  const [rewritingSectionId, setRewritingSectionId] = useState(null);
+  const [showSectionOriginal, setShowSectionOriginal] = useState({});
+  const [analyzingStructure, setAnalyzingStructure] = useState(false);
+
   const bootstrapSamples = precisionMode === 'accurate' ? 10 : 3;
   const isDegraded = !!result?.degraded;
   const useVirtualList = paragraphs.length > VIRTUAL_LIST_THRESHOLD;
@@ -474,8 +483,134 @@ function App() {
     setParagraphs([]);
     setParagraphMode(false);
     setShowOriginalForParagraph({});
+    setStructureResult(null);
+    setStructureMode(false);
+    setSelectedSectionId(null);
+    setRewritingSectionId(null);
+    setShowSectionOriginal({});
     scrollToInput();
   };
+
+  const toggleStructureMode = () => {
+    if (!structureMode && !text.trim()) {
+      alert("请先输入文本内容或上传文件");
+      return;
+    }
+    if (!structureMode && !structureResult) {
+      handleAnalyzeStructure();
+    }
+    setStructureMode(!structureMode);
+    setParagraphMode(false);
+  };
+
+  const handleAnalyzeStructure = async () => {
+    if (!text.trim()) {
+      alert("请先输入文本内容");
+      return;
+    }
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setAnalyzingStructure(true);
+    try {
+      const response = await axios.post(`${API_BASE}/analyze-structure`, { text });
+      setStructureResult(response.data);
+      if (response.data.sections?.length > 0 && !selectedSectionId) {
+        setSelectedSectionId(response.data.sections[0].id);
+      }
+      decreaseQuota();
+    } catch (err) {
+      alert("结构分析失败: " + err.message);
+    } finally {
+      setAnalyzingStructure(false);
+    }
+  };
+
+  const handleSelectSection = (section) => {
+    setSelectedSectionId(section.id);
+    if (section.start_index !== undefined && section.end_index !== undefined) {
+      const textarea = document.querySelector('textarea');
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(section.start_index, section.end_index);
+      }
+    }
+  };
+
+  const handleRewriteSection = async (section) => {
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    if (!section || !section.content) {
+      alert("章节内容为空，无法改写");
+      return;
+    }
+    setRewritingSectionId(section.id);
+    try {
+      const response = await axios.post(`${API_BASE}/rewrite-chapter`, {
+        full_text: text,
+        section: section,
+        level: rewriteLevel
+      });
+
+      const { new_full_text, updated_section, section_detection_after, index_offset } = response.data;
+
+      setText(new_full_text);
+
+      if (structureResult) {
+        const updatedSections = structureResult.sections.map(s => {
+          if (s.id === section.id) {
+            return {
+              ...s,
+              ...updated_section,
+              original_content: section.content,
+              ai_score: section_detection_after?.overall_ai_score ?? s.ai_score,
+              degraded: section_detection_after?.degraded ?? s.degraded,
+              details: section_detection_after?.details ?? s.details
+            };
+          }
+          if (index_offset !== 0 && s.start_index > section.end_index) {
+            return {
+              ...s,
+              start_index: s.start_index + index_offset,
+              end_index: s.end_index + index_offset
+            };
+          }
+          return s;
+        });
+
+        const overallScore = updatedSections.reduce((acc, s) => {
+          if (s.ai_score !== undefined && s.ai_score !== null) {
+            const w = Math.max(1, s.content.length);
+            return { sum: acc.sum + s.ai_score * w, weight: acc.weight + w };
+          }
+          return acc;
+        }, { sum: 0, weight: 0 });
+
+        setStructureResult({
+          ...structureResult,
+          sections: updatedSections,
+          overall_ai_score: overallScore.weight > 0
+            ? Math.round((overallScore.sum / overallScore.weight) * 100) / 100
+            : structureResult.overall_ai_score
+        });
+      }
+
+      setShowSectionOriginal(prev => ({ ...prev, [section.id]: false }));
+      decreaseQuota();
+    } catch (err) {
+      alert("章节改写失败: " + err.message);
+    } finally {
+      setRewritingSectionId(null);
+    }
+  };
+
+  const selectedSection = useMemo(() => {
+    if (!structureResult?.sections || !selectedSectionId) return null;
+    return structureResult.sections.find(s => s.id === selectedSectionId);
+  }, [structureResult, selectedSectionId]);
 
   const decreaseQuota = () => {
     if (quota > 0) {
@@ -687,21 +822,28 @@ function App() {
     }
 
     setLoading(true);
+    setAnalyzingStructure(true);
     setRewriteResult(null);
     setSelectiveRewriteResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
 
     try {
-      const response = await axios.post(`${API_BASE}/detect-file`, formData);
-      setResult(response.data);
-      if (response.data.text) {
-        setText(response.data.text);
+      const structureResponse = await axios.post(`${API_BASE}/analyze-file-structure`, formData);
+      setResult(structureResponse.data.overall_detection || { overall_ai_score: structureResponse.data.structure?.overall_ai_score, details: [], degraded: false });
+      if (structureResponse.data.text) {
+        setText(structureResponse.data.text);
         if (paragraphMode) {
-          let paras = buildParagraphsFromText(response.data.text);
-          paras = applyRecommendations(response.data, paras);
+          let paras = buildParagraphsFromText(structureResponse.data.text);
+          if (structureResponse.data.overall_detection) {
+            paras = applyRecommendations(structureResponse.data.overall_detection, paras);
+          }
           setParagraphs(paras);
         }
+      }
+      setStructureResult(structureResponse.data.structure);
+      if (structureResponse.data.structure?.sections?.length > 0) {
+        setSelectedSectionId(structureResponse.data.structure.sections[0].id);
       }
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
@@ -709,6 +851,7 @@ function App() {
       alert("Error uploading file: " + err.message);
     } finally {
       setLoading(false);
+      setAnalyzingStructure(false);
     }
   };
 
@@ -721,16 +864,24 @@ function App() {
     }
 
     setLoading(true);
+    setAnalyzingStructure(true);
     setRewriteResult(null);
     setSelectiveRewriteResult(null);
     try {
-      const response = await axios.post(`${API_BASE}/detect-text-advanced`, {
-        text,
-        bootstrap_samples: bootstrapSamples
-      });
-      setResult(response.data);
+      const [detectResponse, structureResponse] = await Promise.all([
+        axios.post(`${API_BASE}/detect-text-advanced`, {
+          text,
+          bootstrap_samples: bootstrapSamples
+        }),
+        axios.post(`${API_BASE}/analyze-structure`, { text })
+      ]);
+      setResult(detectResponse.data);
+      setStructureResult(structureResponse.data);
+      if (structureResponse.data.sections?.length > 0 && !selectedSectionId) {
+        setSelectedSectionId(structureResponse.data.sections[0].id);
+      }
       if (paragraphMode) {
-        setParagraphs(prev => applyRecommendations(response.data, prev));
+        setParagraphs(prev => applyRecommendations(detectResponse.data, prev));
       }
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
@@ -738,6 +889,7 @@ function App() {
       alert("Error: " + err.message);
     } finally {
       setLoading(false);
+      setAnalyzingStructure(false);
     }
   };
 
@@ -848,9 +1000,9 @@ function App() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
                       <button
-                        onClick={() => paragraphMode && setParagraphMode(false)}
+                        onClick={() => { setParagraphMode(false); setStructureMode(false); }}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                          !paragraphMode
+                          !paragraphMode && !structureMode
                             ? 'bg-slate-800 text-white border border-slate-700'
                             : 'text-slate-400 hover:text-white'
                         }`}
@@ -869,6 +1021,18 @@ function App() {
                       >
                         <ListChecks className="w-4 h-4" />
                         逐段模式
+                      </button>
+                      <button
+                        onClick={toggleStructureMode}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          structureMode
+                            ? 'bg-purple-600 text-white shadow shadow-purple-500/20'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                        disabled={!text.trim() && !structureResult}
+                      >
+                        <BookOpen className="w-4 h-4" />
+                        结构模式
                       </button>
                     </div>
                     <div className="relative group">
@@ -928,13 +1092,41 @@ function App() {
                   </div>
                 </div>
 
-                {!paragraphMode ? (
+                {!paragraphMode && !structureMode ? (
                   <textarea
                     className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-6 text-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none min-h-[300px] transition-all text-sm leading-relaxed"
-                    placeholder="在此输入您的学术论文片段，或上传附件...（切换到「逐段模式」可精细控制每个段落的改写）"
+                    placeholder="在此输入您的学术论文片段，或上传附件...（切换到「逐段模式」可精细控制每个段落的改写，「结构模式」可按章节分析与改写）"
                     value={text}
                     onChange={(e) => handleTextChange(e.target.value)}
                   ></textarea>
+                ) : structureMode ? (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[400px]">
+                    <div className="lg:col-span-4">
+                      <PaperStructureTree
+                        structure={structureResult}
+                        selectedSectionId={selectedSectionId}
+                        onSelectSection={handleSelectSection}
+                        onRewriteSection={handleRewriteSection}
+                        rewritingSectionId={rewritingSectionId}
+                        formatType={structureResult?.format_type}
+                        fallbackUsed={structureResult?.fallback_used}
+                      />
+                    </div>
+                    <div className="lg:col-span-8">
+                      <SectionContentViewer
+                        section={selectedSection}
+                        showOriginal={!!showSectionOriginal[selectedSectionId]}
+                        onToggleOriginal={() => setShowSectionOriginal(prev => ({
+                          ...prev,
+                          [selectedSectionId]: !prev[selectedSectionId]
+                        }))}
+                        onRewrite={() => selectedSection && handleRewriteSection(selectedSection)}
+                        isRewriting={rewritingSectionId === selectedSectionId}
+                        rewriteLevel={rewriteLevel}
+                        hasOriginal={selectedSection?.original_content}
+                      />
+                    </div>
+                  </div>
                 ) : (
                   <div className="space-y-0">
                     <div className="flex items-center justify-between mb-3 pb-3 border-b border-slate-800">
@@ -1176,6 +1368,58 @@ function App() {
                     <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-slate-500">
                       <AlertTriangle className="w-3 h-3" />
                       <span>模型处于降级状态，置信区间功能已禁用</span>
+                    </div>
+                  )}
+
+                  {structureResult?.sections?.length > 0 && (
+                    <div className="mt-6 pt-6 border-t border-slate-800">
+                      <div className="flex items-center gap-2 mb-4">
+                        <BookOpen className="w-4 h-4 text-purple-400" />
+                        <h3 className="text-sm font-bold text-white">章节风险分布</h3>
+                        <span className="text-[10px] text-slate-500">· 共 {structureResult.section_count} 个章节</span>
+                        {structureResult.fallback_used && (
+                          <span className="text-[10px] text-amber-400 ml-auto">自动分块</span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {structureResult.sections.slice(0, 9).map((section, idx) => {
+                          const riskColor = section.ai_score === undefined || section.ai_score === null
+                            ? { bar: 'bg-slate-500' }
+                            : section.ai_score > 60
+                              ? { bar: 'bg-red-500' }
+                              : section.ai_score > 20
+                                ? { bar: 'bg-yellow-500' }
+                                : { bar: 'bg-green-500' };
+                          return (
+                            <motion.div
+                              key={section.id}
+                              onClick={() => {
+                                setSelectedSectionId(section.id);
+                                setStructureMode(true);
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
+                              }}
+                              className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 cursor-pointer hover:border-purple-500/40 transition-colors"
+                            >
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-xs font-medium text-slate-200 truncate pr-2" title={section.title}>
+                                  {section.title}
+                                </span>
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                  section.ai_score > 60 ? 'bg-red-500/15 text-red-400' : section.ai_score > 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'
+                                }">
+                                  {section.ai_score !== undefined && section.ai_score !== null ? `${section.ai_score}%` : 'N/A'}
+                                </span>
+                              </div>
+                              <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full transition-all duration-500 rounded-full ${riskColor.bar}`}
+                                  style={{ width: `${section.ai_score ?? 0}%` }}
+                                />
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
