@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
@@ -9,6 +9,7 @@ import ResultParagraphCard from './components/ResultParagraphCard';
 import VirtualList from './components/VirtualList';
 import PaperStructureTree from './components/PaperStructureTree';
 import SectionContentViewer from './components/SectionContentViewer';
+import { createSSEClient } from './utils/sseClient';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -464,6 +465,16 @@ function App() {
   const [showSectionOriginal, setShowSectionOriginal] = useState({});
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
 
+  // 流式改写相关状态
+  const sseClientRef = useRef(null);
+  const [streamingText, setStreamingText] = useState("");
+  const [streamingProgress, setStreamingProgress] = useState({ generated: 0, estimated: 0 });
+  const [streamingStatus, setStreamingStatus] = useState(null); // 'streaming' | 'reconnecting' | null
+  const [streamingError, setStreamingError] = useState(null);
+  // 逐段流式状态
+  const [streamingParagraphs, setStreamingParagraphs] = useState([]);
+  const [currentStreamingParaIdx, setCurrentStreamingParaIdx] = useState(null);
+
   const bootstrapSamples = precisionMode === 'accurate' ? 10 : 3;
   const isDegraded = !!result?.degraded;
   const useVirtualList = paragraphs.length > VIRTUAL_LIST_THRESHOLD;
@@ -618,6 +629,33 @@ function App() {
     }
   };
 
+  const _cleanupStreaming = () => {
+    if (sseClientRef.current) {
+      try {
+        sseClientRef.current.abort();
+      } catch (e) { /* ignore */ }
+      sseClientRef.current = null;
+    }
+    setStreamingStatus(null);
+  };
+
+  const handleStopRewrite = async () => {
+    if (!sseClientRef.current) return;
+    const streamId = sseClientRef.current.getStreamId();
+    if (streamId) {
+      try {
+        await axios.post(`${API_BASE}/rewrite-abort`, { stream_id: streamId });
+      } catch (e) { /* ignore */ }
+    }
+    _cleanupStreaming();
+    setRewriting(false);
+  };
+
+  // 组件卸载时清理 SSE
+  useEffect(() => {
+    return () => _cleanupStreaming();
+  }, []);
+
   const toggleParagraphMode = () => {
     if (!paragraphMode) {
       if (!text.trim()) {
@@ -710,26 +748,82 @@ function App() {
     }
     setRewriting(true);
     setRewriteResult(null);
-    try {
-      const payload = {
-        paragraphs: paragraphs.map((p, idx) => ({
-          id: idx,
-          text: p.text,
-          should_rewrite: p.selected && !p.locked,
-          locked: p.locked
-        })),
-        level: rewriteLevel
-      };
-      const response = await axios.post(`${API_BASE}/rewrite-selective`, payload);
-      setSelectiveRewriteResult(response.data);
-      setShowOriginalForParagraph({});
-      decreaseQuota();
-      setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
-    } catch (err) {
-      alert("选择性改写失败: " + err.message);
-    } finally {
-      setRewriting(false);
-    }
+    setSelectiveRewriteResult(null);
+    setStreamingError(null);
+    setStreamingParagraphs(paragraphs.map(p => ({ ...p, rewritten_text: p.text, rewritten: false, _streaming: false })));
+    setCurrentStreamingParaIdx(null);
+    setStreamingStatus('streaming');
+    setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 200);
+
+    const payload = {
+      paragraphs: paragraphs.map((p, idx) => ({
+        id: idx,
+        text: p.text,
+        should_rewrite: p.selected && !p.locked,
+        locked: p.locked
+      })),
+      level: rewriteLevel
+    };
+
+    const client = createSSEClient({
+      url: `${API_BASE}/rewrite-selective-stream`,
+      payload,
+      onEvent: (eventType, data) => {
+        if (eventType === 'paragraph_start') {
+          setCurrentStreamingParaIdx(data.paragraph_index);
+          setStreamingParagraphs(prev => prev.map((p, idx) =>
+            idx === data.paragraph_index ? { ...p, _streaming: true, rewritten_text: '' } : p
+          ));
+        } else if (eventType === 'token') {
+          setStreamingParagraphs(prev => prev.map((p, idx) =>
+            idx === data.paragraph_index ? { ...p, rewritten_text: data.paragraph_text } : p
+          ));
+          setStreamingProgress({
+            generated: data.generated_chars,
+            estimated: data.estimated_paragraph_chars || 0
+          });
+        } else if (eventType === 'paragraph_done') {
+          setStreamingParagraphs(prev => prev.map((p, idx) =>
+            idx === data.paragraph_index
+              ? { ...p, rewritten_text: data.rewritten_text, rewritten: data.rewritten, locked: data.locked, _streaming: false }
+              : p
+          ));
+        } else if (eventType === 'done') {
+          setSelectiveRewriteResult({
+            paragraphs: data.paragraphs,
+            combined_text: data.combined_text,
+            detection_after: data.detection_after
+          });
+          setCurrentStreamingParaIdx(null);
+          setShowOriginalForParagraph({});
+          _cleanupStreaming();
+          setRewriting(false);
+          decreaseQuota();
+        } else if (eventType === 'aborted') {
+          setSelectiveRewriteResult({
+            paragraphs: data.partial_results || [],
+            combined_text: data.combined_text || ''
+          });
+          setCurrentStreamingParaIdx(null);
+          _cleanupStreaming();
+          setRewriting(false);
+        } else if (eventType === 'error') {
+          setStreamingError(data.message || '未知错误');
+          setCurrentStreamingParaIdx(null);
+          _cleanupStreaming();
+          setRewriting(false);
+        } else if (eventType === 'reconnecting') {
+          setStreamingStatus('reconnecting');
+        }
+      },
+      onError: (err) => {
+        setStreamingError(err.message || '连接错误');
+        setCurrentStreamingParaIdx(null);
+        _cleanupStreaming();
+        setRewriting(false);
+      },
+    });
+    sseClientRef.current = client;
   };
 
   const handleParagraphAction = (index, action) => {
@@ -903,23 +997,64 @@ function App() {
 
     setRewriting(true);
     setSelectiveRewriteResult(null);
-    try {
-      const response = await axios.post(`${API_BASE}/rewrite`, {
-        text: text,
-        level: rewriteLevel
-      });
-      setRewriteResult(response.data);
-      const history = response.data.history;
-      const lastVersion = history[history.length - 1].version;
-      setSelectedVersionA(lastVersion);
-      setSelectedVersionB(0);
-      decreaseQuota();
-      setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
-    } catch (err) {
-      alert("Rewriting failed: " + err.message);
-    } finally {
-      setRewriting(false);
-    }
+    setRewriteResult(null);
+    setStreamingError(null);
+    setStreamingText("");
+    setStreamingProgress({ generated: 0, estimated: 0 });
+    setStreamingStatus('streaming');
+    setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 200);
+
+    const originalText = text;
+    const client = createSSEClient({
+      url: `${API_BASE}/rewrite-stream`,
+      payload: { text: originalText, level: rewriteLevel },
+      onEvent: (eventType, data) => {
+        if (eventType === 'start') {
+          setStreamingProgress({ generated: 0, estimated: data.estimated_total_chars });
+        } else if (eventType === 'token') {
+          setStreamingText(data.text);
+          setStreamingProgress({
+            generated: data.generated_chars,
+            estimated: data.estimated_total_chars
+          });
+        } else if (eventType === 'done') {
+          const finalText = data.final_text;
+          setStreamingText(finalText);
+          setRewriteResult({
+            original_text: originalText,
+            rewritten_text: finalText,
+            detection_after: data.detection_after,
+            iterations: 1,
+            history: [
+              { version: 0, label: '原文', text: originalText, detection: null },
+              { version: 1, label: '改写结果', text: finalText, detection: data.detection_after }
+            ]
+          });
+          setSelectedVersionA(1);
+          setSelectedVersionB(0);
+          _cleanupStreaming();
+          setRewriting(false);
+          decreaseQuota();
+        } else if (eventType === 'aborted') {
+          const partialText = data.partial_text || streamingText;
+          setStreamingText(partialText);
+          _cleanupStreaming();
+          setRewriting(false);
+        } else if (eventType === 'error') {
+          setStreamingError(data.message || '未知错误');
+          _cleanupStreaming();
+          setRewriting(false);
+        } else if (eventType === 'reconnecting') {
+          setStreamingStatus('reconnecting');
+        }
+      },
+      onError: (err) => {
+        setStreamingError(err.message || '连接错误');
+        _cleanupStreaming();
+        setRewriting(false);
+      },
+    });
+    sseClientRef.current = client;
   };
 
   const getVersionText = (version) => {
@@ -1245,33 +1380,60 @@ function App() {
                   )}
                 </div>
 
-                <div className="flex gap-3 flex-wrap">
+                <div className="flex gap-3 flex-wrap items-center">
                   <button
                     onClick={handleDetectText}
-                    disabled={loading || !text.trim()}
+                    disabled={loading || !text.trim() || rewriting}
                     className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all border border-slate-700"
                   >
                     {loading ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
                     仅检测 AI 率
                   </button>
-                  {paragraphMode ? (
-                    <button
-                      onClick={handleSelectiveRewrite}
-                      disabled={rewriting || !paragraphs.some(p => p.selected && !p.locked)}
-                      className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
-                    >
-                      {rewriting ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      逐段选择性改写
-                    </button>
+                  {!rewriting ? (
+                    paragraphMode ? (
+                      <button
+                        onClick={handleSelectiveRewrite}
+                        disabled={rewriting || !paragraphs.some(p => p.selected && !p.locked)}
+                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                      >
+                        <Zap className="w-4 h-4" />
+                        逐段选择性改写
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleRewrite}
+                        disabled={rewriting || !text.trim()}
+                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                      >
+                        <Zap className="w-4 h-4" />
+                        一键人性化改写
+                      </button>
+                    )
                   ) : (
-                    <button
-                      onClick={handleRewrite}
-                      disabled={rewriting || !text.trim()}
-                      className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
-                    >
-                      {rewriting ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      一键人性化改写
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl">
+                        {streamingStatus === 'reconnecting' ? (
+                          <>
+                            <WifiOff className="w-4 h-4 text-amber-400 animate-pulse" />
+                            <span className="text-xs font-bold text-amber-400">连接恢复中...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCcw className="w-4 h-4 text-indigo-400 animate-spin" />
+                            <span className="text-xs font-bold text-indigo-400">
+                              正在生成 · {streamingProgress.generated}/{streamingProgress.estimated || '?'}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleStopRewrite}
+                        className="flex items-center gap-2 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold transition-all shadow-xl shadow-red-500/20"
+                      >
+                        <StopCircle className="w-4 h-4" />
+                        停止生成
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -1279,7 +1441,7 @@ function App() {
           </div>
 
           <AnimatePresence>
-            {(result || rewriteResult || selectiveRewriteResult) && (
+            {(result || rewriteResult || selectiveRewriteResult || (rewriting && (streamingText.length > 0 || streamingParagraphs.length > 0))) && (
               <motion.div
                 initial={{ opacity: 0, y: 40 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1423,6 +1585,114 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {rewriting && streamingText && !paragraphMode && !rewriteResult && (
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="lg:col-span-12">
+                      <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-2xl shadow-indigo-500/5">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
+                            <Sparkles className="w-4 h-4" />
+                            正在流式改写（打字机效果）
+                            {streamingStatus === 'reconnecting' && (
+                              <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                                <WifiOff className="w-3 h-3" /> 连接恢复中...
+                              </span>
+                            )}
+                          </h3>
+                          <div className="flex items-center gap-3">
+                            <span className="text-[11px] font-mono text-slate-400">
+                              {streamingProgress.generated} / {streamingProgress.estimated || '?'} 字
+                            </span>
+                            <div className="w-32 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all"
+                                style={{
+                                  width: streamingProgress.estimated
+                                    ? `${Math.min(100, (streamingProgress.generated / streamingProgress.estimated) * 100)}%`
+                                    : '10%'
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-sm leading-relaxed h-[460px] overflow-y-auto pr-4 text-white font-medium whitespace-pre-wrap break-words">
+                          {streamingText}
+                          <span className="inline-block w-2 h-5 bg-indigo-400 ml-0.5 animate-pulse align-middle"></span>
+                        </div>
+                        {streamingError && (
+                          <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">
+                            ⚠️ 错误: {streamingError}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {rewriting && paragraphMode && streamingParagraphs.length > 0 && !selectiveRewriteResult && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
+                    <div className="flex items-center justify-between mb-5">
+                      <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+                        <ListChecks className="w-4 h-4" />
+                        逐段流式改写中
+                        {currentStreamingParaIdx !== null && (
+                          <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
+                            第 {currentStreamingParaIdx + 1} / {streamingParagraphs.length} 段
+                          </span>
+                        )}
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {streamingProgress.generated}/{streamingProgress.estimated || '?'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="space-y-3 max-h-[640px] overflow-y-auto pr-2">
+                      {streamingParagraphs.map((para, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            para._streaming
+                              ? 'bg-indigo-500/5 border-indigo-500/40 shadow-lg shadow-indigo-500/10'
+                              : para.rewritten
+                              ? 'bg-slate-900/60 border-cyan-500/30 border-l-4 border-l-cyan-500'
+                              : 'bg-slate-900/30 border-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                              段落 {idx + 1}
+                            </span>
+                            {para._streaming ? (
+                              <span className="text-[10px] flex items-center gap-1 text-indigo-400">
+                                <RefreshCcw className="w-3 h-3 animate-spin" />
+                                生成中
+                              </span>
+                            ) : para.rewritten ? (
+                              <span className="text-[10px] text-cyan-400">已改写</span>
+                            ) : para.locked ? (
+                              <span className="text-[10px] text-slate-500">已锁定</span>
+                            ) : (
+                              <span className="text-[10px] text-slate-500">未改写</span>
+                            )}
+                          </div>
+                          <p className="text-xs leading-relaxed text-slate-300 whitespace-pre-wrap break-words">
+                            {para.rewritten_text || para.text}
+                            {para._streaming && (
+                              <span className="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-pulse align-middle"></span>
+                            )}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    {streamingError && (
+                      <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">
+                        ⚠️ 错误: {streamingError}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {rewriteResult && (
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
