@@ -1,9 +1,194 @@
-import React, { useState } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { computeWordDiff } from './utils/diff';
 
 const API_BASE = "http://localhost:8417/api";
+
+function DiffView({ oldText, newText }) {
+  const diff = useMemo(() => computeWordDiff(oldText, newText), [oldText, newText]);
+
+  return (
+    <div className="text-sm leading-relaxed text-white whitespace-pre-wrap break-words">
+      {diff.map((op, idx) => {
+        if (op.type === 'equal') {
+          return <span key={idx} className="text-slate-300">{op.value}</span>;
+        }
+        if (op.type === 'insert') {
+          return (
+            <span key={idx} className="bg-green-500/20 text-green-400 border-b-2 border-green-500 rounded px-0.5">
+              {op.value}
+            </span>
+          );
+        }
+        if (op.type === 'delete') {
+          return (
+            <span key={idx} className="bg-red-500/20 text-red-400 line-through border-b-2 border-red-500 rounded px-0.5">
+              {op.value}
+            </span>
+          );
+        }
+        if (op.type === 'replace') {
+          return (
+            <span key={idx}>
+              <span className="bg-red-500/20 text-red-400 line-through border-b-2 border-red-500 rounded px-0.5">
+                {op.oldValue}
+              </span>
+              <span className="bg-yellow-500/20 text-yellow-300 border-b-2 border-yellow-500 rounded px-0.5 mx-0.5">
+                {op.newValue}
+              </span>
+            </span>
+          );
+        }
+        return null;
+      })}
+    </div>
+  );
+}
+
+function TimelineSelector({ history, selectedA, selectedB, onSelectA, onSelectB, viewMode, onChangeViewMode }) {
+  return (
+    <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <History className="w-4 h-4 text-indigo-400" />
+          <h4 className="text-sm font-bold text-white">改写历史栈</h4>
+        </div>
+        <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+          <button
+            onClick={() => onChangeViewMode('single')}
+            className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+              viewMode === 'single'
+                ? 'bg-indigo-600 text-white shadow shadow-indigo-500/20'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Eye className="w-3 h-3" /> 单版本
+          </button>
+          <button
+            onClick={() => onChangeViewMode('diff')}
+            className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1 ${
+              viewMode === 'diff'
+                ? 'bg-indigo-600 text-white shadow shadow-indigo-500/20'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <GitCompare className="w-3 h-3" /> Diff 对比
+          </button>
+        </div>
+      </div>
+
+      <div className="relative">
+        <div className="absolute left-[22px] top-2 bottom-2 w-0.5 bg-gradient-to-b from-indigo-500 via-purple-500 to-cyan-500/50"></div>
+
+        <div className="space-y-2">
+          {history.map((item, idx) => {
+            const isA = selectedA === item.version;
+            const isB = selectedB === item.version;
+            const isSelected = viewMode === 'single' ? isA : (isA || isB);
+
+            return (
+              <div
+                key={item.version}
+                className="relative flex items-start gap-4 cursor-pointer group"
+                onClick={() => {
+                  if (viewMode === 'single') {
+                    onSelectA(item.version);
+                  } else {
+                    if (!isA && !isB) {
+                      if (!isA) onSelectA(item.version);
+                      else onSelectB(item.version);
+                    } else if (isA) {
+                      onSelectA(item.version);
+                    } else if (isB) {
+                      onSelectB(item.version);
+                    }
+                  }
+                }}
+              >
+                <div className="relative z-10 flex-shrink-0">
+                  <div
+                    className={`w-11 h-11 rounded-full flex items-center justify-center border-2 transition-all ${
+                      isSelected
+                        ? 'bg-indigo-600 border-indigo-400 shadow-lg shadow-indigo-500/30 scale-110'
+                        : 'bg-slate-900 border-slate-700 group-hover:border-slate-600'
+                    }`}
+                  >
+                    {item.version === 0 ? (
+                      <FileText className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-slate-500'}`} />
+                    ) : (
+                      <Sparkles className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-slate-500'}`} />
+                    )}
+                  </div>
+                  {viewMode === 'diff' && isA && (
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-cyan-500 rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-black text-white">
+                      A
+                    </div>
+                  )}
+                  {viewMode === 'diff' && isB && (
+                    <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-purple-500 rounded-full border-2 border-slate-900 flex items-center justify-center text-[8px] font-black text-white">
+                      B
+                    </div>
+                  )}
+                </div>
+
+                <div className={`flex-1 rounded-xl p-3 border transition-all ${
+                  isSelected
+                    ? 'bg-indigo-500/10 border-indigo-500/40'
+                    : 'bg-slate-950/50 border-slate-800 group-hover:border-slate-700'
+                }`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-slate-300'}`}>
+                      {item.label}
+                    </span>
+                    {item.detection && (
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                        item.detection.overall_ai_score > 50
+                          ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                          : item.detection.overall_ai_score > 20
+                          ? 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/30'
+                          : 'bg-green-500/15 text-green-400 border border-green-500/30'
+                      }`}>
+                        AI率 {item.detection.overall_ai_score}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                    {item.text.substring(0, 120)}{item.text.length > 120 ? '...' : ''}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {viewMode === 'diff' && (
+        <div className="mt-4 pt-4 border-t border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-cyan-500"></div>
+              <span className="text-xs text-slate-400">版本 A (基准)</span>
+            </div>
+            <ArrowLeftRight className="w-3 h-3 text-slate-600" />
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-purple-500"></div>
+              <span className="text-xs text-slate-400">版本 B (对比)</span>
+            </div>
+          </div>
+          {selectedA !== selectedB && (
+            <div className="flex items-center gap-2 text-[10px]">
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-green-500"></span>新增</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-500"></span>删除</span>
+              <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-yellow-500"></span>替换</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function App() {
   const [file, setFile] = useState(null);
@@ -13,7 +198,10 @@ function App() {
   const [result, setResult] = useState(null);
   const [rewriteLevel, setRewriteLevel] = useState("medium");
   const [rewriteResult, setRewriteResult] = useState(null);
-  const [quota, setQuota] = useState(10); // 每日额度
+  const [quota, setQuota] = useState(10);
+  const [selectedVersionA, setSelectedVersionA] = useState(null);
+  const [selectedVersionB, setSelectedVersionB] = useState(null);
+  const [viewMode, setViewMode] = useState('single');
 
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -24,6 +212,8 @@ function App() {
     setRewriteResult(null);
     setText("");
     setFile(null);
+    setSelectedVersionA(null);
+    setSelectedVersionB(null);
     scrollToInput();
   };
 
@@ -56,7 +246,6 @@ function App() {
       setResult(response.data);
       if (response.data.text) setText(response.data.text);
       decreaseQuota();
-      // Automatically scroll to result after short delay
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
       alert("Error uploading file: " + err.message);
@@ -102,6 +291,10 @@ function App() {
         level: rewriteLevel
       });
       setRewriteResult(response.data);
+      const history = response.data.history;
+      const lastVersion = history[history.length - 1].version;
+      setSelectedVersionA(lastVersion);
+      setSelectedVersionB(0);
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
@@ -111,9 +304,36 @@ function App() {
     }
   };
 
+  const getVersionText = (version) => {
+    if (!rewriteResult?.history) return '';
+    const item = rewriteResult.history.find(h => h.version === version);
+    return item ? item.text : '';
+  };
+
+  const getVersionLabel = (version) => {
+    if (!rewriteResult?.history) return '';
+    const item = rewriteResult.history.find(h => h.version === version);
+    return item ? item.label : '';
+  };
+
+  const getSelectedExportText = () => {
+    if (!rewriteResult?.history) return '';
+    return getVersionText(selectedVersionA);
+  };
+
+  const handleExport = () => {
+    const exportText = getSelectedExportText();
+    const versionLabel = getVersionLabel(selectedVersionA);
+    const blob = new Blob([exportText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rewritten_${versionLabel || 'result'}.txt`;
+    a.click();
+  };
+
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-indigo-500/30 pb-20">
-      {/* Header */}
       <nav className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetAll}>
@@ -130,8 +350,7 @@ function App() {
         </div>
       </nav>
 
-      {/* Hero Section */}
-      <main className="max-w-6xl mx-auto px-4 py-12">
+      <main className="max-w-7xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -139,21 +358,19 @@ function App() {
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-bold mb-6"
           >
             <Sparkles className="w-3 h-3" />
-            全新 Llama 3 改写引擎已上线
+            全新 Llama 3 改写引擎 · 支持多轮历史追溯
           </motion.div>
           <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-6 tracking-tight">
             让 AI 充满 <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400">学术人味</span>
           </h1>
           <p className="text-lg text-slate-400 max-w-2xl mx-auto">
             一站式学术论文工具：深度 AIGC 检测 + 多级人性化改写。
-            <br />锁定术语与格式，只优化叙述逻辑。
+            <br />锁定术语与格式，每一轮迭代都可追溯与对比。
           </p>
         </div>
 
-        {/* Workspace */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
 
-          {/* Input Panel */}
           <div className="lg:col-span-12">
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden group">
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-cyan-500/5 pointer-events-none"></div>
@@ -243,7 +460,6 @@ function App() {
             </div>
           </div>
 
-          {/* Results Area */}
           <AnimatePresence>
             {(result || rewriteResult) && (
               <motion.div
@@ -252,7 +468,6 @@ function App() {
                 id="results-section"
                 className="lg:col-span-12 space-y-8"
               >
-                {/* AI Probability Bar */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 overflow-hidden relative">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                     <div>
@@ -280,7 +495,6 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Progress Visual */}
                   <div className="h-3 w-full bg-slate-950 rounded-full overflow-hidden flex">
                     <div
                       className={`h-full transition-all duration-1000 ${result?.overall_ai_score > 50 ? 'bg-red-500' : 'bg-green-500'}`}
@@ -295,44 +509,89 @@ function App() {
                   </div>
                 </div>
 
-                {/* Comparison View */}
                 {rewriteResult && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-slate-900/50 border border-slate-800 rounded-3xl p-6 backdrop-blur">
-                      <h3 className="text-sm font-bold text-slate-500 mb-4 flex items-center gap-2">
-                        <FileText className="w-4 h-4" /> 原文 (高风险内容为红色)
-                      </h3>
-                      <div className="text-sm leading-relaxed text-slate-400 h-[400px] overflow-y-auto pr-4">
-                        {text}
-                      </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                    <div className="lg:col-span-4">
+                      <TimelineSelector
+                        history={rewriteResult.history}
+                        selectedA={selectedVersionA}
+                        selectedB={selectedVersionB}
+                        onSelectA={setSelectedVersionA}
+                        onSelectB={(v) => {
+                          if (v !== selectedVersionA) setSelectedVersionB(v);
+                          else {
+                            const other = rewriteResult.history.find(h => h.version !== v);
+                            if (other) setSelectedVersionB(other.version);
+                          }
+                        }}
+                        viewMode={viewMode}
+                        onChangeViewMode={setViewMode}
+                      />
                     </div>
-                    <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-2xl shadow-indigo-500/5">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                          <Sparkles className="w-4 h-4" /> 人性化改写文
-                        </h3>
-                        <button
-                          onClick={() => {
-                            const blob = new Blob([rewriteResult.rewritten_text], { type: 'text/plain' });
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = 'rewritten_paper.txt';
-                            a.click();
-                          }}
-                          className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
-                        >
-                          <FileDown className="w-3 h-3" /> 导出 TXT
-                        </button>
-                      </div>
-                      <div className="text-sm leading-relaxed text-white h-[400px] overflow-y-auto pr-4 font-medium">
-                        {rewriteResult.rewritten_text}
+
+                    <div className="lg:col-span-8">
+                      <div className="bg-slate-900 border border-indigo-500/30 rounded-3xl p-6 shadow-2xl shadow-indigo-500/5 h-full flex flex-col">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
+                            {viewMode === 'single' ? (
+                              <>
+                                <Sparkles className="w-4 h-4" />
+                                {getVersionLabel(selectedVersionA)}
+                              </>
+                            ) : (
+                              <>
+                                <GitCompare className="w-4 h-4" />
+                                {getVersionLabel(selectedVersionA)} ↔ {getVersionLabel(selectedVersionB)} Diff 对比
+                              </>
+                            )}
+                          </h3>
+                          <button
+                            onClick={handleExport}
+                            className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
+                          >
+                            <FileDown className="w-3 h-3" />
+                            导出 [{getVersionLabel(selectedVersionA)}]
+                          </button>
+                        </div>
+                        <div className="text-sm leading-relaxed h-[460px] overflow-y-auto pr-4 flex-1">
+                          {viewMode === 'single' ? (
+                            <div className="text-white font-medium whitespace-pre-wrap break-words">
+                              {getVersionText(selectedVersionA)}
+                            </div>
+                          ) : selectedVersionA === selectedVersionB ? (
+                            <div className="text-slate-500 text-center py-20">
+                              <GitCompare className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                              <p>请选择两个不同版本进行 Diff 对比</p>
+                            </div>
+                          ) : (
+                            <DiffView
+                              oldText={getVersionText(selectedVersionB)}
+                              newText={getVersionText(selectedVersionA)}
+                            />
+                          )}
+                        </div>
+
+                        {viewMode === 'diff' && selectedVersionA !== selectedVersionB && (
+                          <div className="mt-4 pt-4 border-t border-slate-800 flex flex-wrap items-center gap-4 text-[11px]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded-sm bg-green-500/30 border-b-2 border-green-500"></span>
+                              <span className="text-slate-400">新增内容</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded-sm bg-red-500/30 border-b-2 border-red-500 line-through"></span>
+                              <span className="text-slate-400">删除内容</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="inline-block w-3 h-3 rounded-sm bg-yellow-500/30 border-b-2 border-yellow-500"></span>
+                              <span className="text-slate-400">替换内容</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Detailed Chunks (When no rewrite result yet) */}
                 {!rewriteResult && result?.details && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {result.details.map((chunk, idx) => (
@@ -356,7 +615,6 @@ function App() {
         </div>
       </main>
 
-      {/* Trust Badges */}
       {!result && !rewriteResult && (
         <div className="max-w-4xl mx-auto px-4 mt-20 opacity-30 grayscale contrast-125">
           <div className="flex flex-wrap justify-center gap-12 items-center">

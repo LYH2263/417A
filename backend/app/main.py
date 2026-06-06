@@ -44,11 +44,25 @@ async def rewrite(payload: RewritePayload):
     max_retries = 3
     detection_after = None
     
+    history = []
+    history.append({
+        "version": 0,
+        "label": "原文",
+        "text": payload.text,
+        "detection": None
+    })
+    
     for i in range(max_retries):
         current_text = rewrite_text(current_text, payload.level)
         detection_after = detect_ai_content(current_text)
         
-        # If AI score is below 10%, we are done
+        history.append({
+            "version": i + 1,
+            "label": f"第{i + 1}轮改写",
+            "text": current_text,
+            "detection": detection_after
+        })
+        
         if detection_after["overall_ai_score"] < 10:
             break
             
@@ -56,7 +70,8 @@ async def rewrite(payload: RewritePayload):
         "original_text": payload.text,
         "rewritten_text": current_text,
         "detection_after": detection_after,
-        "iterations": i + 1
+        "iterations": i + 1,
+        "history": history
     }
 
 @app.get("/")
