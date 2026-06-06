@@ -2,3 +2,5 @@
 题目.md
 迭代.md
 代码生成.md
+__pycache__/
+*.pyc
