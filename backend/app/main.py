@@ -1,21 +1,21 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 try:
     from app.parser import extract_text
     from app.detector import detect_ai_content, detect_ai_content_advanced
-    from app.rewriter import rewrite_text
+    from app.rewriter import rewrite_text, rewrite_text_with_context
 except ImportError:
     try:
         from .parser import extract_text
         from .detector import detect_ai_content, detect_ai_content_advanced
-        from .rewriter import rewrite_text
+        from .rewriter import rewrite_text, rewrite_text_with_context
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content, detect_ai_content_advanced
-        from rewriter import rewrite_text
+        from rewriter import rewrite_text, rewrite_text_with_context
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -37,6 +37,131 @@ class AdvancedDetectPayload(BaseModel):
 class RewritePayload(BaseModel):
     text: str
     level: str = "medium"
+
+class SelectiveParagraph(BaseModel):
+    id: int
+    text: str
+    should_rewrite: bool = True
+    locked: bool = False
+
+class SelectiveRewritePayload(BaseModel):
+    paragraphs: List[SelectiveParagraph]
+    level: str = "medium"
+
+
+def smart_split_paragraphs(text: str) -> List[str]:
+    """
+    Smart paragraph splitting: merges consecutive short lines to avoid
+    treating each line as a separate paragraph.
+    """
+    if not text:
+        return []
+    
+    raw_lines = text.split('\n')
+    SHORT_LINE_THRESHOLD = 40
+    
+    paragraphs = []
+    current_buffer = []
+    
+    for line in raw_lines:
+        stripped = line.strip()
+        
+        if not stripped:
+            if current_buffer:
+                paragraphs.append('\n'.join(current_buffer).strip())
+                current_buffer = []
+            continue
+        
+        is_short = len(stripped) < SHORT_LINE_THRESHOLD
+        
+        if not current_buffer:
+            current_buffer.append(stripped)
+        else:
+            last_in_buffer = current_buffer[-1]
+            last_is_short = len(last_in_buffer) < SHORT_LINE_THRESHOLD
+            
+            if is_short or last_is_short:
+                current_buffer.append(stripped)
+            else:
+                paragraphs.append('\n'.join(current_buffer).strip())
+                current_buffer = [stripped]
+    
+    if current_buffer:
+        paragraphs.append('\n'.join(current_buffer).strip())
+    
+    result = []
+    for p in paragraphs:
+        if p and p.strip():
+            result.append(p.strip())
+    return result
+
+
+@app.post("/api/split-paragraphs")
+async def split_paragraphs(payload: TextPayload):
+    if not payload.text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    paragraphs = smart_split_paragraphs(payload.text)
+    return {
+        "paragraphs": [
+            {"id": idx, "text": p}
+            for idx, p in enumerate(paragraphs)
+        ]
+    }
+
+
+@app.post("/api/rewrite-selective")
+async def rewrite_selective(payload: SelectiveRewritePayload):
+    if not payload.paragraphs:
+        raise HTTPException(status_code=400, detail="No paragraphs provided")
+    
+    sorted_paras = sorted(payload.paragraphs, key=lambda p: p.id)
+    all_texts = [p.text for p in sorted_paras]
+    results = []
+    
+    for idx, para in enumerate(sorted_paras):
+        original_text = para.text
+        
+        if para.locked or not para.should_rewrite:
+            results.append({
+                "id": para.id,
+                "original_text": original_text,
+                "rewritten_text": original_text,
+                "rewritten": False,
+                "locked": para.locked
+            })
+            continue
+        
+        prev_ctx = all_texts[idx - 1] if idx > 0 else ""
+        next_ctx = all_texts[idx + 1] if idx < len(all_texts) - 1 else ""
+        
+        rewritten = rewrite_text_with_context(
+            text=original_text,
+            prev_context=prev_ctx,
+            next_context=next_ctx,
+            level=payload.level
+        )
+        
+        results.append({
+            "id": para.id,
+            "original_text": original_text,
+            "rewritten_text": rewritten,
+            "rewritten": True,
+            "locked": False
+        })
+    
+    rewritten_para_texts = [r["rewritten_text"] for r in sorted(results, key=lambda x: x["id"])]
+    combined_text = "\n\n".join(rewritten_para_texts)
+    
+    try:
+        detection_after = detect_ai_content(combined_text)
+    except Exception:
+        detection_after = None
+    
+    return {
+        "paragraphs": results,
+        "combined_text": combined_text,
+        "detection_after": detection_after
+    }
 
 @app.post("/api/rewrite")
 async def rewrite(payload: RewritePayload):

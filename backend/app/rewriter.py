@@ -84,6 +84,83 @@ def _simulated_rewrite(text: str) -> str:
             
     return " ".join(rewritten_words)
 
+def rewrite_text_with_context(text: str, prev_context: str = "", next_context: str = "", level: str = "medium"):
+    """
+    Rewrites a single paragraph with adjacent paragraph context for cohesion.
+    Only the target paragraph is rewritten; context is used for reference only.
+    Levels: low, medium, high
+    """
+    if not GROQ_API_KEY:
+        print("⚠️ 未配置 GROQ_API_KEY，切换到降级方案（模拟改写）")
+        return _simulated_rewrite(text)
+
+    prompts = {
+        "low": "Perform slight synonym replacement and minor sentence restructuring to improve flow while maintaining the original tone.",
+        "medium": "Restructure sentences and vary vocabulary significantly. Use diverse sentence lengths and improve transitional flow to sound more like a seasoned human academic writer.",
+        "high": "Deeply transform the narrative structure. Combine or split sentences, use sophisticated academic vocabulary, and introduce human-like 'burstiness' (varying complexity). Ensure the meaning is identical but the linguistic fingerprint is entirely different."
+    }
+
+    instruction = prompts.get(level, prompts["medium"])
+
+    context_parts = []
+    if prev_context:
+        context_parts.append(f"[Previous paragraph (for context only, do NOT rewrite or include in output)]:\n{prev_context}")
+    if next_context:
+        context_parts.append(f"[Next paragraph (for context only, do NOT rewrite or include in output)]:\n{next_context}")
+
+    context_block = "\n\n".join(context_parts) if context_parts else ""
+
+    system_prompt = f"""You are a professional academic editor specialized in reducing AIGC (AI-Generated Content) detection rates while maintaining extreme academic rigors.
+
+Your Task: {instruction}
+
+STRICT CONSTRAINTS:
+1. DO NOT change any technical terms, domain-specific vocabulary, or proper nouns.
+2. DO NOT change any mathematical formulas, LaTeX expressions, or chemical symbols.
+3. DO NOT change any citations (e.g., [12], (Author, 2023)) or references.
+4. DO NOT change experimental data, numbers, or specific results.
+5. Maintain the original meaning and logical structure of the argument.
+6. Improve the 'human-like' qualities: use varied sentence lengths, appropriate transitional phrases, and a natural academic style.
+7. Pay attention to contextual cohesion with the provided adjacent paragraphs. Use transitions naturally so the rewritten paragraph flows well with its neighbors.
+8. ONLY output the rewritten target paragraph. Do NOT include the context paragraphs, do NOT add any labels or markers.
+
+{context_block}
+
+OUTPUT: Provide ONLY the rewritten text of the target paragraph, no explanations, no preamble, and no 'Here is the rewritten text' message."""
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"[Target paragraph to rewrite]:\n{text}"}
+        ],
+        "temperature": 0.7 if level == "low" else (0.85 if level == "medium" else 1.0),
+        "max_tokens": 2000
+    }
+
+    try:
+        print(f"🔄 正在调用 Groq API（带上下文改写），模型: {MODEL_NAME}")
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=20)
+
+        if response.status_code != 200:
+            print(f"❌ Groq API 错误 ({response.status_code})，切换到降级方案")
+            return _simulated_rewrite(text)
+
+        result = response.json()
+        rewritten = result['choices'][0]['message']['content'].strip()
+        print(f"✅ Groq API 上下文改写成功")
+        return rewritten
+
+    except Exception as e:
+        print(f"❌ Groq API 调用失败: {str(e)}，启动降级方案")
+        return _simulated_rewrite(text)
+
+
 def rewrite_text(text: str, level: str = "medium"):
     """
     Rewrites academic text using Groq API while preserving technical terms and structure.

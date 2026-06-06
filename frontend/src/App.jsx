@@ -1,8 +1,12 @@
-import React, { useState, useMemo } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale } from 'lucide-react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
+import { buildParagraphsFromText, applyRecommendations } from './utils/paragraphUtils';
+import SelectiveParagraphCard from './components/SelectiveParagraphCard';
+import ResultParagraphCard from './components/ResultParagraphCard';
+import VirtualList from './components/VirtualList';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -16,6 +20,10 @@ const credibilityMeta = {
   medium: { label: '中可信度', color: 'text-yellow-400',  bg: 'bg-yellow-500/10',  border: 'border-yellow-500/30',  dot: 'bg-yellow-400'  },
   low:    { label: '低可信度', color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-500/30',     dot: 'bg-red-400'     }
 };
+
+const VIRTUAL_LIST_THRESHOLD = 20;
+const PARAGRAPH_CARD_HEIGHT = 160;
+const VIRTUAL_OVERSCAN = 5;
 
 function DiffView({ oldText, newText }) {
   const diff = useMemo(() => computeWordDiff(oldText, newText), [oldText, newText]);
@@ -441,8 +449,15 @@ function App() {
   const [viewMode, setViewMode] = useState('single');
   const [precisionMode, setPrecisionMode] = useState('accurate');
 
+  const [paragraphMode, setParagraphMode] = useState(false);
+  const [paragraphs, setParagraphs] = useState([]);
+  const [selectiveRewriteResult, setSelectiveRewriteResult] = useState(null);
+  const [dragIndex, setDragIndex] = useState(null);
+  const [showOriginalForParagraph, setShowOriginalForParagraph] = useState({});
+
   const bootstrapSamples = precisionMode === 'accurate' ? 10 : 3;
   const isDegraded = !!result?.degraded;
+  const useVirtualList = paragraphs.length > VIRTUAL_LIST_THRESHOLD;
 
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -451,10 +466,14 @@ function App() {
   const resetAll = () => {
     setResult(null);
     setRewriteResult(null);
+    setSelectiveRewriteResult(null);
     setText("");
     setFile(null);
     setSelectedVersionA(null);
     setSelectedVersionB(null);
+    setParagraphs([]);
+    setParagraphMode(false);
+    setShowOriginalForParagraph({});
     scrollToInput();
   };
 
@@ -462,6 +481,152 @@ function App() {
     if (quota > 0) {
       setQuota(prev => prev - 1);
     }
+  };
+
+  const toggleParagraphMode = () => {
+    if (!paragraphMode) {
+      if (!text.trim()) {
+        alert("请先输入文本内容");
+        return;
+      }
+      let paras = buildParagraphsFromText(text);
+      if (result) {
+        paras = applyRecommendations(result, paras);
+      }
+      setParagraphs(paras);
+    }
+    setParagraphMode(!paragraphMode);
+  };
+
+  const handleTextChange = (val) => {
+    setText(val);
+    if (paragraphMode) {
+      let paras = buildParagraphsFromText(val);
+      if (result) {
+        paras = applyRecommendations(result, paras);
+      }
+      setParagraphs(paras);
+    }
+  };
+
+  const toggleParagraphSelect = (index) => {
+    setParagraphs(prev => {
+      const next = [...prev];
+      if (!next[index].locked) {
+        next[index] = { ...next[index], selected: !next[index].selected };
+      }
+      return next;
+    });
+  };
+
+  const toggleParagraphLock = (index) => {
+    setParagraphs(prev => {
+      const next = [...prev];
+      const locked = !next[index].locked;
+      next[index] = { ...next[index], locked, selected: locked ? false : next[index].selected };
+      return next;
+    });
+  };
+
+  const selectAllParagraphs = () => {
+    setParagraphs(prev => prev.map(p => p.locked ? p : { ...p, selected: true }));
+  };
+
+  const deselectAllParagraphs = () => {
+    setParagraphs(prev => prev.map(p => p.locked ? p : { ...p, selected: false }));
+  };
+
+  const handleDragStart = (e, index) => {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e, index) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === index) return;
+    setParagraphs(prev => {
+      const next = [...prev];
+      const [removed] = next.splice(dragIndex, 1);
+      next.splice(index, 0, removed);
+      return next;
+    });
+    setDragIndex(null);
+  };
+
+  const handleDragEnd = () => {
+    setDragIndex(null);
+  };
+
+  const handleSelectiveRewrite = async () => {
+    if (!paragraphs.length) return;
+    const hasSelected = paragraphs.some(p => p.selected && !p.locked);
+    if (!hasSelected) {
+      alert("请至少选择一个段落进行改写");
+      return;
+    }
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+    setRewriting(true);
+    setRewriteResult(null);
+    try {
+      const payload = {
+        paragraphs: paragraphs.map((p, idx) => ({
+          id: idx,
+          text: p.text,
+          should_rewrite: p.selected && !p.locked,
+          locked: p.locked
+        })),
+        level: rewriteLevel
+      };
+      const response = await axios.post(`${API_BASE}/rewrite-selective`, payload);
+      setSelectiveRewriteResult(response.data);
+      setShowOriginalForParagraph({});
+      decreaseQuota();
+      setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
+    } catch (err) {
+      alert("选择性改写失败: " + err.message);
+    } finally {
+      setRewriting(false);
+    }
+  };
+
+  const handleParagraphAction = (index, action) => {
+    if (action === 'revert') {
+      setSelectiveRewriteResult(prev => {
+        if (!prev) return prev;
+        const sorted = [...prev.paragraphs].sort((a, b) => a.id - b.id);
+        const target = sorted[index];
+        if (target) {
+          target.rewritten_text = target.original_text;
+          target.rewritten = false;
+          target._reverted = true;
+        }
+        const combinedText = sorted.map(p => p.rewritten_text).join('\n\n');
+        return { ...prev, paragraphs: prev.paragraphs, combined_text: combinedText };
+      });
+    } else if (action === 'toggle') {
+      setShowOriginalForParagraph(prev => ({
+        ...prev,
+        [index]: !prev[index]
+      }));
+    }
+  };
+
+  const handleExportSelective = () => {
+    if (!selectiveRewriteResult) return;
+    const blob = new Blob([selectiveRewriteResult.combined_text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rewritten_selective_result.txt`;
+    a.click();
   };
 
   const handleBatchClick = () => {
@@ -523,13 +688,21 @@ function App() {
 
     setLoading(true);
     setRewriteResult(null);
+    setSelectiveRewriteResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
 
     try {
       const response = await axios.post(`${API_BASE}/detect-file`, formData);
       setResult(response.data);
-      if (response.data.text) setText(response.data.text);
+      if (response.data.text) {
+        setText(response.data.text);
+        if (paragraphMode) {
+          let paras = buildParagraphsFromText(response.data.text);
+          paras = applyRecommendations(response.data, paras);
+          setParagraphs(paras);
+        }
+      }
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
@@ -549,12 +722,16 @@ function App() {
 
     setLoading(true);
     setRewriteResult(null);
+    setSelectiveRewriteResult(null);
     try {
       const response = await axios.post(`${API_BASE}/detect-text-advanced`, {
         text,
         bootstrap_samples: bootstrapSamples
       });
       setResult(response.data);
+      if (paragraphMode) {
+        setParagraphs(prev => applyRecommendations(response.data, prev));
+      }
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
     } catch (err) {
@@ -573,6 +750,7 @@ function App() {
     }
 
     setRewriting(true);
+    setSelectiveRewriteResult(null);
     try {
       const response = await axios.post(`${API_BASE}/rewrite`, {
         text: text,
@@ -648,14 +826,14 @@ function App() {
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-bold mb-6"
           >
             <Sparkles className="w-3 h-3" />
-            全新 Llama 3 改写引擎 · 支持 Bootstrap 置信度检测
+            全新 Llama 3 改写引擎 · 支持 Bootstrap 置信度检测 & 逐段选择性改写
           </motion.div>
           <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-6 tracking-tight">
             让 AI 充满 <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400">学术人味</span>
           </h1>
           <p className="text-lg text-slate-400 max-w-2xl mx-auto">
-            一站式学术论文工具：深度 AIGC 检测 + 多级人性化改写。
-            <br />Bootstrap 置信区间评估，每一段落都提供可信度等级。
+            一站式学术论文工具：深度 AIGC 检测 + 逐段选择性人性化改写。
+            <br />支持段落锁定、拖拽排序、智能推荐改写与独立撤销。
           </p>
         </div>
 
@@ -668,7 +846,31 @@ function App() {
               <div className="relative mb-6">
                 <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium border border-slate-700">文本模式</button>
+                    <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                      <button
+                        onClick={() => paragraphMode && setParagraphMode(false)}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          !paragraphMode
+                            ? 'bg-slate-800 text-white border border-slate-700'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <FileText className="w-4 h-4" />
+                        文本模式
+                      </button>
+                      <button
+                        onClick={toggleParagraphMode}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          paragraphMode
+                            ? 'bg-indigo-600 text-white shadow shadow-indigo-500/20'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                        disabled={!text.trim() && !paragraphs.length}
+                      >
+                        <ListChecks className="w-4 h-4" />
+                        逐段模式
+                      </button>
+                    </div>
                     <div className="relative group">
                       <button
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${loading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:bg-slate-800 text-slate-400 hover:text-white'
@@ -726,16 +928,108 @@ function App() {
                   </div>
                 </div>
 
-                <textarea
-                  className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-6 text-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none min-h-[300px] transition-all text-sm leading-relaxed"
-                  placeholder="在此输入您的学术论文片段，或上传附件..."
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                ></textarea>
+                {!paragraphMode ? (
+                  <textarea
+                    className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-6 text-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none min-h-[300px] transition-all text-sm leading-relaxed"
+                    placeholder="在此输入您的学术论文片段，或上传附件...（切换到「逐段模式」可精细控制每个段落的改写）"
+                    value={text}
+                    onChange={(e) => handleTextChange(e.target.value)}
+                  ></textarea>
+                ) : (
+                  <div className="space-y-0">
+                    <div className="flex items-center justify-between mb-3 pb-3 border-b border-slate-800">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-slate-400 flex items-center gap-1">
+                          <ListChecks className="w-3.5 h-3.5" />
+                          共 {paragraphs.length} 个段落
+                          {paragraphs.some(p => p.selected && !p.locked) && (
+                            <span className="ml-1 text-indigo-400">
+                              · 已选 {paragraphs.filter(p => p.selected && !p.locked).length} 段参与改写
+                            </span>
+                          )}
+                        </span>
+                        {useVirtualList && (
+                          <span className="text-[10px] text-slate-500 bg-slate-800/60 px-2 py-0.5 rounded-full border border-slate-700">
+                            虚拟滚动已启用
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={selectAllParagraphs}
+                          className="text-[11px] font-bold px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition-colors"
+                        >
+                          <CheckSquare className="w-3 h-3" /> 全选
+                        </button>
+                        <button
+                          onClick={deselectAllParagraphs}
+                          className="text-[11px] font-bold px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition-colors"
+                        >
+                          <Square className="w-3 h-3" /> 全不选
+                        </button>
+                        <button
+                          onClick={() => {
+                            const newText = paragraphs.map(p => p.text).join('\n\n');
+                            setText(newText);
+                          }}
+                          className="text-[11px] font-bold px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 flex items-center gap-1 transition-colors"
+                          title="用当前段落内容更新原文"
+                        >
+                          <RefreshCcw className="w-3 h-3" /> 同步到原文
+                        </button>
+                      </div>
+                    </div>
+                    <div className="min-h-[300px] max-h-[600px]">
+                      {useVirtualList ? (
+                        <VirtualList
+                          items={paragraphs}
+                          itemHeight={PARAGRAPH_CARD_HEIGHT}
+                          overscan={VIRTUAL_OVERSCAN}
+                          renderItem={(para, idx) => (
+                            <div className="mb-3 pr-2">
+                              <SelectiveParagraphCard
+                                para={para}
+                                index={idx}
+                                aiScore={para._aiScore}
+                                recommendation={para._recommendation}
+                                isDragging={dragIndex === idx}
+                                onToggleSelect={toggleParagraphSelect}
+                                onToggleLock={toggleParagraphLock}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleDragEnd}
+                                onDragOver={handleDragOver}
+                                onDrop={handleDrop}
+                              />
+                            </div>
+                          )}
+                        />
+                      ) : (
+                        <div className="overflow-y-auto max-h-[600px] pr-2 space-y-3">
+                          {paragraphs.map((p, i) => (
+                            <SelectiveParagraphCard
+                              key={p.id ?? i}
+                              para={p}
+                              index={i}
+                              aiScore={p._aiScore}
+                              recommendation={p._recommendation}
+                              isDragging={dragIndex === i}
+                              onToggleSelect={toggleParagraphSelect}
+                              onToggleLock={toggleParagraphLock}
+                              onDragStart={handleDragStart}
+                              onDragEnd={handleDragEnd}
+                              onDragOver={handleDragOver}
+                              onDrop={handleDrop}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
                     {['low', 'medium', 'high'].map(l => (
                       <button
@@ -751,9 +1045,15 @@ function App() {
                     <Layers className="w-4 h-4" />
                     <span>术语锁定已开启</span>
                   </div>
+                  {paragraphMode && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                      <Shuffle className="w-3 h-3" />
+                      <span>拖拽卡片可调整顺序</span>
+                    </div>
+                  )}
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-3 flex-wrap">
                   <button
                     onClick={handleDetectText}
                     disabled={loading || !text.trim()}
@@ -762,21 +1062,32 @@ function App() {
                     {loading ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
                     仅检测 AI 率
                   </button>
-                  <button
-                    onClick={handleRewrite}
-                    disabled={rewriting || !text.trim()}
-                    className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
-                  >
-                    {rewriting ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                    一键人性化改写
-                  </button>
+                  {paragraphMode ? (
+                    <button
+                      onClick={handleSelectiveRewrite}
+                      disabled={rewriting || !paragraphs.some(p => p.selected && !p.locked)}
+                      className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                    >
+                      {rewriting ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      逐段选择性改写
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleRewrite}
+                      disabled={rewriting || !text.trim()}
+                      className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                    >
+                      {rewriting ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                      一键人性化改写
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           </div>
 
           <AnimatePresence>
-            {(result || rewriteResult) && (
+            {(result || rewriteResult || selectiveRewriteResult) && (
               <motion.div
                 initial={{ opacity: 0, y: 40 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -815,6 +1126,17 @@ function App() {
                           </div>
                         </div>
                       )}
+                      {selectiveRewriteResult && (
+                        <div className="flex items-center gap-6 pl-6 border-l border-slate-800">
+                          <ChevronRight className="text-slate-700" />
+                          <div className="text-center">
+                            <p className="text-xs text-cyan-400 uppercase font-bold mb-1">逐段改写后 AI 率</p>
+                            <p className="text-3xl font-black text-cyan-400">
+                              {selectiveRewriteResult.detection_after?.overall_ai_score}%
+                            </p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -827,6 +1149,12 @@ function App() {
                       <div
                         className="h-full bg-indigo-500 transition-all duration-1000 border-l-2 border-slate-900"
                         style={{ width: `${rewriteResult.detection_after?.overall_ai_score}%` }}
+                      ></div>
+                    )}
+                    {selectiveRewriteResult && (
+                      <div
+                        className="h-full bg-cyan-500 transition-all duration-1000 border-l-2 border-slate-900"
+                        style={{ width: `${selectiveRewriteResult.detection_after?.overall_ai_score}%` }}
                       ></div>
                     )}
                   </div>
@@ -935,7 +1263,41 @@ function App() {
                   </div>
                 )}
 
-                {!rewriteResult && result?.details && (
+                {selectiveRewriteResult && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl">
+                    <div className="flex items-center justify-between mb-5">
+                      <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
+                        <ListChecks className="w-4 h-4" />
+                        逐段改写结果
+                        <span className="text-[10px] font-normal text-slate-500">
+                          · 蓝色边线=已改写，灰色边线=未改写
+                        </span>
+                      </h3>
+                      <button
+                        onClick={handleExportSelective}
+                        className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
+                      >
+                        <FileDown className="w-3 h-3" />
+                        导出结果
+                      </button>
+                    </div>
+                    <div className="space-y-3 max-h-[640px] overflow-y-auto pr-2">
+                      {[...selectiveRewriteResult.paragraphs]
+                        .sort((a, b) => a.id - b.id)
+                        .map((para, idx) => (
+                          <ResultParagraphCard
+                            key={para.id}
+                            para={para}
+                            index={idx}
+                            showOriginal={!!showOriginalForParagraph[idx]}
+                            onRevert={handleParagraphAction}
+                          />
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {!rewriteResult && !selectiveRewriteResult && result?.details && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {result.details.map((chunk, idx) => (
                       <ParagraphCard
@@ -954,7 +1316,7 @@ function App() {
         </div>
       </main>
 
-      {!result && !rewriteResult && (
+      {!result && !rewriteResult && !selectiveRewriteResult && (
         <div className="max-w-4xl mx-auto px-4 mt-20 opacity-30 grayscale contrast-125">
           <div className="flex flex-wrap justify-center gap-12 items-center">
             <div className="text-xl font-bold italic">IEEE</div>
