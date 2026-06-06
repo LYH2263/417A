@@ -1,10 +1,21 @@
 import React, { useState, useMemo } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
 
 const API_BASE = "http://localhost:8417/api";
+
+const CREDIBILITY_STD_THRESHOLD = {
+  high: 0.05,
+  medium: 0.12
+};
+
+const credibilityMeta = {
+  high:   { label: '高可信度', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', dot: 'bg-emerald-400' },
+  medium: { label: '中可信度', color: 'text-yellow-400',  bg: 'bg-yellow-500/10',  border: 'border-yellow-500/30',  dot: 'bg-yellow-400'  },
+  low:    { label: '低可信度', color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-500/30',     dot: 'bg-red-400'     }
+};
 
 function DiffView({ oldText, newText }) {
   const diff = useMemo(() => computeWordDiff(oldText, newText), [oldText, newText]);
@@ -190,6 +201,232 @@ function TimelineSelector({ history, selectedA, selectedB, onSelectA, onSelectB,
   );
 }
 
+function ErrorBar({ mean, ciLower, ciUpper, std, disabled }) {
+  const pct = (v) => Math.max(0, Math.min(100, v * 100));
+  const meanPct = pct(mean);
+  const ciLowPct = pct(ciLower);
+  const ciHighPct = pct(ciUpper);
+
+  const barColor = disabled
+    ? 'bg-slate-600'
+    : mean > 0.5 ? 'bg-red-500' : 'bg-emerald-500';
+  const ciColor = disabled ? 'bg-slate-500' : 'bg-indigo-400/60';
+  const endCapColor = disabled ? 'bg-slate-500' : 'bg-indigo-400';
+
+  return (
+    <div className={`w-full h-8 flex items-center relative ${disabled ? 'opacity-40' : ''}`}>
+      <div className="absolute inset-x-0 h-1 bg-slate-800 rounded-full top-1/2 -translate-y-1/2">
+        <div
+          className="absolute h-full bg-slate-700/50 rounded-full"
+          style={{ left: `${ciLowPct}%`, width: `${ciHighPct - ciLowPct}%` }}
+        />
+        <div
+          className={`absolute h-full ${ciColor} rounded-full`}
+          style={{ left: `${ciLowPct}%`, width: `${ciHighPct - ciLowPct}%`, opacity: disabled ? 0.5 : 0.7 }}
+        />
+        <div
+          className={`absolute -top-1.5 h-4 w-0.5 ${endCapColor}`}
+          style={{ left: `${ciLowPct}%` }}
+        />
+        <div
+          className={`absolute -top-1.5 h-4 w-0.5 ${endCapColor}`}
+          style={{ left: `${ciHighPct}%` }}
+        />
+        <div
+          className={`absolute -top-2 h-5 w-1.5 rounded-full ${barColor} shadow-lg ring-2 ring-slate-950 z-10`}
+          style={{ left: `calc(${meanPct}% - 3px)` }}
+        />
+      </div>
+      <span className="absolute left-0 top-0 text-[9px] text-slate-600 font-bold">0%</span>
+      <span className="absolute left-1/2 -translate-x-1/2 top-0 text-[9px] text-slate-600 font-bold">50%</span>
+      <span className="absolute right-0 top-0 text-[9px] text-slate-600 font-bold">100%</span>
+    </div>
+  );
+}
+
+function ParagraphCard({ chunk, idx, disabled, onSplitRedetect }) {
+  const [hovered, setHovered] = useState(false);
+  const scorePct = Math.round(chunk.ai_score * 100);
+  const hasStats = chunk.mean !== undefined && chunk.std !== undefined;
+  const credibility = chunk.credibility || (hasStats
+    ? (chunk.std <= CREDIBILITY_STD_THRESHOLD.high ? 'high'
+      : chunk.std <= CREDIBILITY_STD_THRESHOLD.medium ? 'medium' : 'low')
+    : null);
+  const isUncertain = credibility === 'low' && !disabled;
+  const meta = credibility ? credibilityMeta[credibility] : null;
+
+  return (
+    <motion.div
+      layout
+      className={`p-4 rounded-2xl transition-all relative border ${
+        isUncertain
+          ? 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
+          : disabled
+          ? 'bg-slate-900/30 border-slate-800/50 opacity-60'
+          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700'
+      }`}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">段落 {idx + 1}</span>
+          {meta && !disabled && (
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1 ${meta.bg} ${meta.color} ${meta.border} border`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`}></span>
+              {meta.label}
+            </span>
+          )}
+          {disabled && (
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-slate-700/40 text-slate-500 border border-slate-600/40 flex items-center gap-1">
+              <Info className="w-2.5 h-2.5" /> 模型降级中
+            </span>
+          )}
+        </div>
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+          disabled ? 'bg-slate-700/40 text-slate-500' :
+          chunk.ai_score > 0.5 ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'
+        }`}>
+          {scorePct}%
+        </span>
+      </div>
+
+      <p className={`text-xs leading-relaxed mb-3 ${disabled ? 'text-slate-500' : 'text-slate-400'}`}>
+        {chunk.text}
+      </p>
+
+      {hasStats && (
+        <div
+          className="relative"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          <ErrorBar
+            mean={chunk.mean}
+            ciLower={chunk.ci_lower}
+            ciUpper={chunk.ci_upper}
+            std={chunk.std}
+            disabled={disabled}
+          />
+          <AnimatePresence>
+            {hovered && !disabled && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                className="absolute left-1/2 -translate-x-1/2 -top-2 -translate-y-full z-50 pointer-events-none"
+              >
+                <div className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 shadow-2xl whitespace-nowrap text-xs">
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <span className="text-slate-500 text-[10px] block">均值</span>
+                      <span className="text-white font-bold">{(chunk.mean * 100).toFixed(1)}%</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 text-[10px] block">±标准差</span>
+                      <span className="text-indigo-400 font-bold">±{(chunk.std * 100).toFixed(2)}%</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 text-[10px] block">95% CI</span>
+                      <span className="text-emerald-400 font-bold">
+                        [{(chunk.ci_lower * 100).toFixed(1)}%, {(chunk.ci_upper * 100).toFixed(1)}%]
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 text-[10px] block">采样次数</span>
+                      <span className="text-slate-300 font-bold">{chunk.sample_count}次</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-2 h-2 bg-slate-950 border-r border-b border-slate-700 rotate-45 absolute left-1/2 -translate-x-1/2 -bottom-1"></div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {isUncertain && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          className="mt-3 pt-3 border-t border-amber-500/20"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-[11px] text-amber-300 font-medium mb-2">
+                结果不确定，建议拆分后重新检测
+              </p>
+              <button
+                onClick={() => onSplitRedetect && onSplitRedetect(idx, chunk)}
+                className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors"
+              >
+                <Split className="w-3 h-3" />
+                一键拆分重检
+              </button>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </motion.div>
+  );
+}
+
+function OverallCredibility({ result, disabled }) {
+  if (!result) return null;
+  const credibility = result.overall_credibility || (
+    result.overall_std !== undefined
+      ? (result.overall_std <= CREDIBILITY_STD_THRESHOLD.high ? 'high'
+        : result.overall_std <= CREDIBILITY_STD_THRESHOLD.medium ? 'medium' : 'low')
+      : null
+  );
+  if (!credibility) return null;
+  const meta = credibilityMeta[credibility];
+
+  return (
+    <div className={`flex items-center gap-3 px-4 py-2 rounded-xl border ${
+      disabled ? 'bg-slate-800/40 border-slate-700/40 opacity-60' : `${meta.bg} ${meta.border}`
+    }`}>
+      <Scale className={`w-4 h-4 ${disabled ? 'text-slate-500' : meta.color}`} />
+      <div className="flex flex-col">
+        <span className={`text-[10px] font-bold uppercase tracking-wider ${disabled ? 'text-slate-500' : meta.color}`}>
+          {disabled ? '整体可信度 (模型降级)' : '整体检测可信度'}
+        </span>
+        <span className={`text-sm font-black ${disabled ? 'text-slate-400' : 'text-white'}`}>
+          {disabled ? '不可用' : meta.label}
+          {!disabled && result.overall_std !== undefined && (
+            <span className={`ml-2 text-[10px] font-normal ${meta.color}`}>
+              σ = {(result.overall_std * 100).toFixed(2)}%
+            </span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TimeComparison({ elapsedMs, sampleCount, disabled }) {
+  if (elapsedMs === undefined || elapsedMs === null) return null;
+  const baselineMs = Math.max(200, elapsedMs / Math.max(1, sampleCount) * 1.2);
+  const slowdown = sampleCount > 1 ? (elapsedMs / baselineMs).toFixed(1) : 1;
+
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[11px] ${
+      disabled ? 'bg-slate-800/40 border-slate-700/40 text-slate-500 opacity-60'
+               : 'bg-slate-800/60 border-slate-700 text-slate-400'
+    }`}>
+      <Timer className="w-3 h-3" />
+      <span className="font-mono font-bold text-slate-200">{elapsedMs}ms</span>
+      {sampleCount > 1 && !disabled && (
+        <>
+          <span className="text-slate-600">|</span>
+          <span>
+            {sampleCount}次采样 · <span className="text-amber-400 font-bold">{slowdown}x</span> 单次耗时
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [file, setFile] = useState(null);
   const [text, setText] = useState("");
@@ -202,6 +439,10 @@ function App() {
   const [selectedVersionA, setSelectedVersionA] = useState(null);
   const [selectedVersionB, setSelectedVersionB] = useState(null);
   const [viewMode, setViewMode] = useState('single');
+  const [precisionMode, setPrecisionMode] = useState('accurate');
+
+  const bootstrapSamples = precisionMode === 'accurate' ? 10 : 3;
+  const isDegraded = !!result?.degraded;
 
   const scrollToInput = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -225,6 +466,50 @@ function App() {
 
   const handleBatchClick = () => {
     alert("批量处理功能正在内测中。如需大批量处理，请通过 API 接入或联系学术客服。");
+  };
+
+  const handleSplitRedetect = async (idx, chunk) => {
+    if (!chunk.text) return;
+    const sentences = chunk.text.split(/(?<=[。.!?！？.])\s+/).filter(s => s.trim().length > 5);
+    if (sentences.length < 2) {
+      alert("该段落内容较短，无法进一步拆分。请手动编辑后重试。");
+      return;
+    }
+
+    if (quota <= 0) {
+      alert("今日额度已用完，请明天再试或升级账户。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await axios.post(`${API_BASE}/detect-text-advanced`, {
+        text: sentences.join('\n\n'),
+        bootstrap_samples: bootstrapSamples
+      });
+      const newResult = response.data;
+      const currentDetails = result.details || [];
+      const newDetails = [
+        ...currentDetails.slice(0, idx),
+        ...newResult.details,
+        ...currentDetails.slice(idx + 1)
+      ];
+      const totalWeight = newDetails.reduce((s, d) => s + Math.max(1, d.text.length), 0);
+      const weightedMean = totalWeight > 0
+        ? newDetails.reduce((s, d) => s + d.mean * Math.max(1, d.text.length), 0) / totalWeight
+        : 0;
+      setResult({
+        ...result,
+        details: newDetails,
+        overall_ai_score: Math.round(weightedMean * 100 * 100) / 100,
+        overall_mean: weightedMean
+      });
+      decreaseQuota();
+    } catch (err) {
+      alert("拆分重检失败: " + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleFileUpload = async (e) => {
@@ -265,7 +550,10 @@ function App() {
     setLoading(true);
     setRewriteResult(null);
     try {
-      const response = await axios.post(`${API_BASE}/detect-text`, { text });
+      const response = await axios.post(`${API_BASE}/detect-text-advanced`, {
+        text,
+        bootstrap_samples: bootstrapSamples
+      });
       setResult(response.data);
       decreaseQuota();
       setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 500);
@@ -332,6 +620,8 @@ function App() {
     a.click();
   };
 
+  const hasAdvancedStats = result && result.details && result.details[0] && result.details[0].mean !== undefined;
+
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-indigo-500/30 pb-20">
       <nav className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
@@ -358,14 +648,14 @@ function App() {
             className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-bold mb-6"
           >
             <Sparkles className="w-3 h-3" />
-            全新 Llama 3 改写引擎 · 支持多轮历史追溯
+            全新 Llama 3 改写引擎 · 支持 Bootstrap 置信度检测
           </motion.div>
           <h1 className="text-4xl md:text-6xl font-extrabold text-white mb-6 tracking-tight">
             让 AI 充满 <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400">学术人味</span>
           </h1>
           <p className="text-lg text-slate-400 max-w-2xl mx-auto">
             一站式学术论文工具：深度 AIGC 检测 + 多级人性化改写。
-            <br />锁定术语与格式，每一轮迭代都可追溯与对比。
+            <br />Bootstrap 置信区间评估，每一段落都提供可信度等级。
           </p>
         </div>
 
@@ -376,8 +666,8 @@ function App() {
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-cyan-500/5 pointer-events-none"></div>
 
               <div className="relative mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex gap-2">
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium border border-slate-700">文本模式</button>
                     <div className="relative group">
                       <button
@@ -404,6 +694,31 @@ function App() {
                         accept=".pdf,.docx,.txt"
                         disabled={loading}
                       />
+                    </div>
+                    <div className="flex items-center gap-2 pl-2 ml-2 border-l border-slate-700">
+                      <Target className="w-3.5 h-3.5 text-slate-500" />
+                      <div className="flex bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                        <button
+                          onClick={() => setPrecisionMode('fast')}
+                          className={`px-3 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                            precisionMode === 'fast'
+                              ? 'bg-emerald-600 text-white shadow shadow-emerald-500/20'
+                              : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          <Zap className="w-3 h-3" /> 快速模式 (3次)
+                        </button>
+                        <button
+                          onClick={() => setPrecisionMode('accurate')}
+                          className={`px-3 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                            precisionMode === 'accurate'
+                              ? 'bg-indigo-600 text-white shadow shadow-indigo-500/20'
+                              : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          <Gauge className="w-3 h-3" /> 精确模式 (10次)
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div className="text-xs text-slate-500">
@@ -472,12 +787,20 @@ function App() {
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                     <div>
                       <h2 className="text-2xl font-bold text-white mb-2">分析报告</h2>
-                      <p className="text-slate-400 text-sm">基于 RoBERTa 及语义突发性检测引擎</p>
+                      <p className="text-slate-400 text-sm">基于 RoBERTa 及语义突发性检测引擎 · Bootstrap 置信区间</p>
                     </div>
-                    <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-6 flex-wrap">
+                      <OverallCredibility result={result} disabled={isDegraded} />
+                      {hasAdvancedStats && (
+                        <TimeComparison
+                          elapsedMs={result.elapsed_ms}
+                          sampleCount={result.bootstrap_samples || bootstrapSamples}
+                          disabled={isDegraded}
+                        />
+                      )}
                       <div className="text-center">
                         <p className="text-xs text-slate-500 uppercase font-bold mb-1">原文 AI 率</p>
-                        <p className={`text-3xl font-black ${result?.overall_ai_score > 50 ? 'text-red-500' : 'text-green-500'}`}>
+                        <p className={`text-3xl font-black ${isDegraded ? 'text-slate-500' : result?.overall_ai_score > 50 ? 'text-red-500' : 'text-green-500'}`}>
                           {result?.overall_ai_score}%
                         </p>
                       </div>
@@ -495,9 +818,9 @@ function App() {
                     </div>
                   </div>
 
-                  <div className="h-3 w-full bg-slate-950 rounded-full overflow-hidden flex">
+                  <div className={`h-3 w-full bg-slate-950 rounded-full overflow-hidden flex ${isDegraded ? 'opacity-50' : ''}`}>
                     <div
-                      className={`h-full transition-all duration-1000 ${result?.overall_ai_score > 50 ? 'bg-red-500' : 'bg-green-500'}`}
+                      className={`h-full transition-all duration-1000 ${isDegraded ? 'bg-slate-600' : result?.overall_ai_score > 50 ? 'bg-red-500' : 'bg-green-500'}`}
                       style={{ width: `${result?.overall_ai_score}%` }}
                     ></div>
                     {rewriteResult && (
@@ -507,6 +830,26 @@ function App() {
                       ></div>
                     )}
                   </div>
+
+                  {hasAdvancedStats && !isDegraded && result.overall_ci_lower !== undefined && (
+                    <div className="mt-4 flex items-center justify-center gap-3 text-[11px] text-slate-500">
+                      <span>95% 置信区间:</span>
+                      <span className="font-mono font-bold text-indigo-400">
+                        [{(result.overall_ci_lower * 100).toFixed(1)}%, {(result.overall_ci_upper * 100).toFixed(1)}%]
+                      </span>
+                      <span className="text-slate-700">|</span>
+                      <span>标准差 σ:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        {(result.overall_std * 100).toFixed(2)}%
+                      </span>
+                    </div>
+                  )}
+                  {isDegraded && (
+                    <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-slate-500">
+                      <AlertTriangle className="w-3 h-3" />
+                      <span>模型处于降级状态，置信区间功能已禁用</span>
+                    </div>
+                  )}
                 </div>
 
                 {rewriteResult && (
@@ -595,17 +938,13 @@ function App() {
                 {!rewriteResult && result?.details && (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {result.details.map((chunk, idx) => (
-                      <div key={idx} className="p-4 bg-slate-900/50 border border-slate-800 rounded-2xl hover:border-slate-700 transition-colors">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">段落 {idx + 1}</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${chunk.ai_score > 0.5 ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>
-                            {Math.round(chunk.ai_score * 100)}%
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed">
-                          {chunk.text}
-                        </p>
-                      </div>
+                      <ParagraphCard
+                        key={idx}
+                        chunk={chunk}
+                        idx={idx}
+                        disabled={isDegraded}
+                        onSplitRedetect={handleSplitRedetect}
+                      />
                     ))}
                   </div>
                 )}

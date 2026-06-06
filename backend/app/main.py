@@ -1,25 +1,24 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 try:
     from app.parser import extract_text
-    from app.detector import detect_ai_content
+    from app.detector import detect_ai_content, detect_ai_content_advanced
     from app.rewriter import rewrite_text
 except ImportError:
     try:
         from .parser import extract_text
-        from .detector import detect_ai_content
+        from .detector import detect_ai_content, detect_ai_content_advanced
         from .rewriter import rewrite_text
     except ImportError:
         from parser import extract_text
-        from detector import detect_ai_content
+        from detector import detect_ai_content, detect_ai_content_advanced
         from rewriter import rewrite_text
 
 app = FastAPI(title="Academic AIGC Helper API")
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,6 +29,10 @@ app.add_middleware(
 
 class TextPayload(BaseModel):
     text: str
+
+class AdvancedDetectPayload(BaseModel):
+    text: str
+    bootstrap_samples: int = Field(default=5, ge=1, le=50, description="Bootstrap 采样次数：快速模式3次，精确模式10次")
 
 class RewritePayload(BaseModel):
     text: str
@@ -83,6 +86,13 @@ async def detect_text(payload: TextPayload):
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
     result = detect_ai_content(payload.text)
+    return result
+
+@app.post("/api/detect-text-advanced")
+async def detect_text_advanced(payload: AdvancedDetectPayload):
+    if not payload.text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    result = detect_ai_content_advanced(payload.text, bootstrap_samples=payload.bootstrap_samples)
     return result
 
 @app.post("/api/detect-file")
