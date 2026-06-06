@@ -1,0 +1,101 @@
+[
+  {
+    "version": "1.4.0",
+    "date": "2026-06-07",
+    "title": "新手引导 & 更新日志",
+    "changes": [
+      {
+        "type": "new",
+        "text": "新增完整的新手引导系统，首次访问自动触发分步教程"
+      },
+      {
+        "type": "new",
+        "text": "新增功能更新日志弹窗，每次版本更新自动展示"
+      },
+      {
+        "type": "new",
+        "text": "Header 区新增「?」帮助按钮，可随时重新触发新手引导"
+      }
+    ]
+  },
+  {
+    "version": "1.3.0",
+    "date": "2026-06-05",
+    "title": "逐段选择性改写 & 流式输出",
+    "changes": [
+      {
+        "type": "new",
+        "text": "新增逐段选择性改写模式，支持段落锁定与拖拽排序"
+      },
+      {
+        "type": "new",
+        "text": "改写改为流式输出（SSE），支持打字机效果与停止生成"
+      },
+      {
+        "type": "improvement",
+        "text": "段落过多时自动启用虚拟滚动，优化大文本性能"
+      }
+    ]
+  },
+  {
+    "version": "1.2.0",
+    "date": "2026-06-02",
+    "title": "Bootstrap 置信度 & 论文结构分析",
+    "changes": [
+      {
+        "type": "new",
+        "text": "检测引擎升级为 Bootstrap 多次采样，提供置信区间与可信度等级"
+      },
+      {
+        "type": "new",
+        "text": "新增论文结构分析模块，可按章节查看 AI 风险分布"
+      },
+      {
+        "type": "new",
+        "text": "支持按章节独立改写，结果实时刷新章节评分"
+      }
+    ]
+  },
+  {
+    "version": "1.1.0",
+    "date": "2026-05-28",
+    "title": "改写历史栈 & Diff 对比",
+    "changes": [
+      {
+        "type": "new",
+        "text": "新增改写历史版本栈，保留每轮改写中间产物"
+      },
+      {
+        "type": "new",
+        "text": "任意两个版本间可做词级 Diff 对比，高亮增删改"
+      },
+      {
+        "type": "improvement",
+        "text": "导出功能支持选择任意历史版本下载"
+      }
+    ]
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-05-20",
+    "title": "PaperWise AI 首次发布",
+    "changes": [
+      {
+        "type": "new",
+        "text": "学术论文 AIGC 检测（基于 RoBERTa + 语义突发性）"
+      },
+      {
+        "type": "new",
+        "text": "一键人性化改写（Llama 3 引擎，三档改写强度）"
+      },
+      {
+        "type": "new",
+        "text": "支持 PDF / DOCX / TXT 文件上传解析"
+      },
+      {
+        "type": "new",
+        "text": "检测结果导出为纯文本 TXT"
+      }
+    ]
+  }
+]

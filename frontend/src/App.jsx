@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff, HelpCircle, ScrollText } from 'lucide-react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
@@ -10,6 +10,9 @@ import VirtualList from './components/VirtualList';
 import PaperStructureTree from './components/PaperStructureTree';
 import SectionContentViewer from './components/SectionContentViewer';
 import { createSSEClient } from './utils/sseClient';
+import TourGuide from './components/TourGuide';
+import ChangelogModal from './components/ChangelogModal';
+import changelogData from './data/changelog.json';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -464,6 +467,39 @@ function App() {
   const [rewritingSectionId, setRewritingSectionId] = useState(null);
   const [showSectionOriginal, setShowSectionOriginal] = useState({});
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
+
+  const [tourOpen, setTourOpen] = useState(false);
+  const [changelogOpen, setChangelogOpen] = useState(false);
+
+  useEffect(() => {
+    const tourSeen = localStorage.getItem('paperwise_tour_seen');
+    if (!tourSeen) {
+      const t = setTimeout(() => setTourOpen(true), 600);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
+  useEffect(() => {
+    const lastSeenVersion = localStorage.getItem('paperwise_last_changelog_version');
+    const currentVersion = changelogData[0]?.version;
+    if (currentVersion && lastSeenVersion !== currentVersion) {
+      const t = setTimeout(() => {
+        setChangelogOpen(true);
+        localStorage.setItem('paperwise_last_changelog_version', currentVersion);
+      }, 1200);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
+  const handleTourComplete = () => {
+    localStorage.setItem('paperwise_tour_seen', 'true');
+    setTourOpen(false);
+  };
+
+  const handleTourClose = () => {
+    localStorage.setItem('paperwise_tour_seen', 'true');
+    setTourOpen(false);
+  };
 
   // 流式改写相关状态
   const sseClientRef = useRef(null);
@@ -1101,6 +1137,20 @@ function App() {
             <div className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
               今日额度: <span className={quota > 3 ? "text-indigo-400" : "text-red-400"}>{quota}/10</span>
             </div>
+            <button
+              onClick={() => setChangelogOpen(true)}
+              className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 flex items-center justify-center text-slate-400 hover:text-white transition-all"
+              title="更新日志"
+            >
+              <ScrollText className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setTourOpen(true)}
+              className="w-8 h-8 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 hover:border-indigo-500/50 flex items-center justify-center text-indigo-400 hover:text-indigo-300 transition-all"
+              title="使用帮助"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </nav>
@@ -1229,6 +1279,7 @@ function App() {
 
                 {!paragraphMode && !structureMode ? (
                   <textarea
+                    id="tour-text-input"
                     className="w-full bg-slate-950/80 border border-slate-800 rounded-2xl p-6 text-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none min-h-[300px] transition-all text-sm leading-relaxed"
                     placeholder="在此输入您的学术论文片段，或上传附件...（切换到「逐段模式」可精细控制每个段落的改写，「结构模式」可按章节分析与改写）"
                     value={text}
@@ -1357,7 +1408,7 @@ function App() {
 
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-4 flex-wrap">
-                  <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                  <div id="tour-rewrite-level" className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
                     {['low', 'medium', 'high'].map(l => (
                       <button
                         key={l}
@@ -1380,7 +1431,7 @@ function App() {
                   )}
                 </div>
 
-                <div className="flex gap-3 flex-wrap items-center">
+                <div id="tour-detect-btn" className="flex gap-3 flex-wrap items-center">
                   <button
                     onClick={handleDetectText}
                     disabled={loading || !text.trim() || rewriting}
@@ -1448,7 +1499,7 @@ function App() {
                 id="results-section"
                 className="lg:col-span-12 space-y-8"
               >
-                <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 overflow-hidden relative">
+                <div id="tour-result-section" className="bg-slate-900 border border-slate-800 rounded-3xl p-8 overflow-hidden relative">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
                     <div>
                       <h2 className="text-2xl font-bold text-white mb-2">分析报告</h2>
@@ -1731,6 +1782,7 @@ function App() {
                             )}
                           </h3>
                           <button
+                            id="tour-export-btn"
                             onClick={handleExport}
                             className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
                           >
@@ -1845,6 +1897,16 @@ function App() {
       <footer className="mt-12 border-t border-slate-800 py-8 text-center text-slate-500 text-sm">
         <p>© 2026 PaperWise AI. 专业级学术诚信守护者。</p>
       </footer>
+
+      <TourGuide
+        isOpen={tourOpen}
+        onClose={handleTourClose}
+        onComplete={handleTourComplete}
+      />
+      <ChangelogModal
+        isOpen={changelogOpen}
+        onClose={() => setChangelogOpen(false)}
+      />
     </div>
   );
 }
