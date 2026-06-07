@@ -1101,7 +1101,7 @@ function App() {
           _cleanupStreaming();
           setRewriting(false);
         } else if (eventType === 'reconnect_reset') {
-          setStreamingParagraphs(paragraphs.map(p => ({ ...p, rewritten_text: p.text, rewritten: false, _streaming: false }));
+          setStreamingParagraphs(paragraphs.map(p => ({ ...p, rewritten_text: p.text, rewritten: false, _streaming: false })));
           setCurrentStreamingParaIdx(null);
           setStreamingProgress({ generated: 0, estimated: 0 });
           setReconnectInfo({
