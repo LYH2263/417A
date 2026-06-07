@@ -12,7 +12,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "4173:4173" # Vite preview default port is 4173
+      - "5417:5417"
     depends_on:
       - backend
 

@@ -13,5 +13,5 @@ COPY . .
 
 # 如果是生产环境，先 build 再用 preview
 RUN npm run build
-EXPOSE 4173
-CMD ["npm", "run", "preview", "--", "--host", "--port", "4173"]
+EXPOSE 5417
+CMD ["npm", "run", "preview", "--", "--host", "--port", "5417"]

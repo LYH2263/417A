@@ -2042,7 +2042,7 @@ function App() {
                                 </span>
                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${
                                   section.ai_score > 60 ? 'bg-red-500/15 text-red-400' : section.ai_score > 20 ? 'bg-yellow-500/15 text-yellow-400' : 'bg-green-500/15 text-green-400'
-                                }">
+                                }`}>
                                   {section.ai_score !== undefined && section.ai_score !== null ? `${section.ai_score}%` : 'N/A'}
                                 </span>
                               </div>
