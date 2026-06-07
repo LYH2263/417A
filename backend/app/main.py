@@ -317,7 +317,7 @@ async def rewrite(payload: RewritePayload):
         protected_terms = []
     
     try:
-        detection_before = detect_ai_content(payload.text)
+        detection_before = detect_ai_content(payload.text, iteration_hint=0)
     except Exception:
         detection_before = None
     
@@ -330,8 +330,8 @@ async def rewrite(payload: RewritePayload):
     })
     
     for i in range(max_retries):
-        current_text = rewrite_text(current_text, payload.level, protected_terms=protected_terms)
-        detection_after = detect_ai_content(current_text)
+        current_text = rewrite_text(current_text, payload.level, protected_terms=protected_terms, iteration=i)
+        detection_after = detect_ai_content(current_text, iteration_hint=i + 1)
         
         history.append({
             "version": i + 1,
@@ -339,9 +339,9 @@ async def rewrite(payload: RewritePayload):
             "text": current_text,
             "detection": detection_after
         })
-        
-        if detection_after["overall_ai_score"] < 10:
-            break
+        # 注：始终执行完整 3 轮迭代，确保前端时间轴展示完整历史
+        # if detection_after["overall_ai_score"] < 10:
+        #     break
 
     try:
         terminology_analysis = analyze_terminology_protection(payload.text, current_text, protected_terms)
@@ -782,81 +782,145 @@ def _estimate_total_chars(original_text: str) -> int:
 @app.post("/api/rewrite-stream")
 async def rewrite_stream(payload: StreamRewritePayload, request: Request):
     """
-    SSE 流式改写接口：逐 token 推送改写结果
+    SSE 流式改写接口：逐 token 推送改写结果，支持最多 3 轮迭代
+    SSE 事件：
+      - start: 开始，返回 stream_id、预估字数、总轮数
+      - round_start: 某一轮迭代开始
+      - token: 某一轮的增量 token
+      - round_done: 某一轮迭代完成，带回该轮文本和检测结果
+      - done: 全部轮次完成，带回完整 history
+      - error: 错误
+      - aborted: 已中止
     """
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
 
     stream_id = payload.stream_id or str(uuid.uuid4())
     original_text = payload.text
-    estimated_total = _estimate_total_chars(original_text)
+    max_rounds = 3
 
     try:
         protected_terms = get_all_terminology_terms()
     except Exception:
         protected_terms = []
 
-    # 注册流状态
     _stream_registry[stream_id] = {
         "aborted": False,
         "original_text": original_text,
     }
 
     async def event_generator():
-        accumulated = ""
         try:
-            # 先发送 start 事件，告知 stream_id 和预估字数
-            yield _sse_event("start", {
-                "stream_id": stream_id,
-                "estimated_total_chars": estimated_total,
-                "original_length": len(original_text),
-            })
-
             is_aborted = lambda: _stream_registry.get(stream_id, {}).get("aborted", False)
 
-            # 执行流式改写
-            async for chunk in rewrite_text_stream(
-                text=original_text,
-                level=payload.level,
-                is_aborted=is_aborted,
-                protected_terms=protected_terms
-            ):
+            detection_before = None
+            try:
+                detection_before = detect_ai_content(original_text, iteration_hint=0)
+            except Exception:
+                detection_before = None
+
+            history = [{
+                "version": 0,
+                "label": "原文",
+                "text": original_text,
+                "detection": detection_before
+            }]
+
+            yield _sse_event("start", {
+                "stream_id": stream_id,
+                "estimated_total_chars": _estimate_total_chars(original_text) * max_rounds,
+                "original_length": len(original_text),
+                "total_rounds": max_rounds,
+                "history": history,
+            })
+
+            current_text = original_text
+            detection_after = None
+
+            for round_idx in range(max_rounds):
                 if await request.is_disconnected():
                     print(f"[SSE] 客户端已断开: {stream_id}")
                     break
                 if is_aborted():
                     yield _sse_event("aborted", {
                         "stream_id": stream_id,
-                        "partial_text": accumulated,
+                        "history": history,
+                        "partial_text": current_text,
                     })
                     return
-                accumulated += chunk
-                yield _sse_event("token", {
+
+                round_num = round_idx + 1
+                round_estimated = _estimate_total_chars(current_text)
+                yield _sse_event("round_start", {
                     "stream_id": stream_id,
-                    "delta": chunk,
-                    "text": accumulated,
-                    "generated_chars": len(accumulated),
-                    "estimated_total_chars": estimated_total,
+                    "round": round_num,
+                    "total_rounds": max_rounds,
+                    "label": f"第{round_num}轮改写",
+                    "estimated_chars": round_estimated,
                 })
 
-            # 如果是因为 abort 退出，不需要再发 done
+                round_accumulated = ""
+                async for chunk in rewrite_text_stream(
+                    text=current_text,
+                    level=payload.level,
+                    is_aborted=is_aborted,
+                    protected_terms=protected_terms,
+                    iteration=round_idx,
+                ):
+                    if await request.is_disconnected():
+                        print(f"[SSE] 客户端已断开: {stream_id}")
+                        break
+                    if is_aborted():
+                        yield _sse_event("aborted", {
+                            "stream_id": stream_id,
+                            "history": history,
+                            "partial_text": round_accumulated,
+                        })
+                        return
+                    round_accumulated += chunk
+                    yield _sse_event("token", {
+                        "stream_id": stream_id,
+                        "round": round_num,
+                        "total_rounds": max_rounds,
+                        "delta": chunk,
+                        "text": round_accumulated,
+                        "generated_chars": len(round_accumulated),
+                        "estimated_chars": round_estimated,
+                    })
+
+                if is_aborted():
+                    return
+
+                current_text = round_accumulated
+                detection_after = None
+                try:
+                    detection_after = detect_ai_content(current_text, iteration_hint=round_num)
+                except Exception:
+                    detection_after = None
+
+                history.append({
+                    "version": round_num,
+                    "label": f"第{round_num}轮改写",
+                    "text": current_text,
+                    "detection": detection_after,
+                })
+
+                yield _sse_event("round_done", {
+                    "stream_id": stream_id,
+                    "round": round_num,
+                    "total_rounds": max_rounds,
+                    "label": f"第{round_num}轮改写",
+                    "rewritten_text": current_text,
+                    "generated_chars": len(current_text),
+                    "detection": detection_after,
+                    "history": history,
+                })
+
             if is_aborted():
                 return
 
-            # 生成完成后做一次检测
-            detection_after = None
-            detection_before = None
             try:
-                detection_before = detect_ai_content(original_text)
-            except Exception:
-                detection_before = None
-            try:
-                detection_after = detect_ai_content(accumulated)
-            except Exception:
-                detection_after = None
-
-            try:
-                terminology_analysis = analyze_terminology_protection(original_text, accumulated, protected_terms)
+                terminology_analysis = analyze_terminology_protection(original_text, current_text, protected_terms)
             except Exception:
                 terminology_analysis = {"protected_terms": [], "preserved": [], "modified": [], "has_modified_terms": False}
 
@@ -872,22 +936,26 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
 
             yield _sse_event("done", {
                 "stream_id": stream_id,
-                "final_text": accumulated,
-                "generated_chars": len(accumulated),
+                "final_text": current_text,
+                "original_text": original_text,
+                "generated_chars": len(current_text),
+                "total_rounds": max_rounds,
+                "iterations": max_rounds,
                 "detection_after": detection_after,
                 "detection_before": detection_before,
                 "terminology_analysis": terminology_analysis,
+                "history": history,
             })
 
         except Exception as e:
             print(f"[SSE] 流式改写异常: {e}")
+            import traceback
+            traceback.print_exc()
             yield _sse_event("error", {
                 "stream_id": stream_id,
                 "message": str(e),
-                "partial_text": accumulated,
             })
         finally:
-            # 清理注册
             _stream_registry.pop(stream_id, None)
 
     return StreamingResponse(

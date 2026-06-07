@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import random
 from dotenv import load_dotenv
 import json
 import asyncio
@@ -14,56 +15,115 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.3-70b-versatile")
 
 
-def _simulated_rewrite(text: str) -> str:
+def _simulated_rewrite(text: str, iteration: int = 0) -> str:
     """
     降级方案：模拟人工改写功能
     通过同义词替换和句式调整模拟学术改写，用于 API 调用失败时的兜底。
+    iteration 参数用于控制不同轮次使用不同的替换策略，确保每轮结果有差异。
     """
-    # 学术同义词映射
-    synonyms = {
-        "However": "Nevertheless",
-        "Therefore": "Consequently",
-        "Furthermore": "Moreover",
-        "Thus": "Hence",
-        "Because": "Since",
-        "Important": "Critical",
-        "Significant": "Substantial",
-        "Necessary": "Essential",
-        "Show": "Demonstrate",
-        "Use": "Utilize",
-        "Improve": "Enhance",
-        "Result": "Outcome",
-        "Method": "Approach",
-        "Data": "Information",
-        "Small": "Marginal",
-        "Large": "Extensive",
-        "Find": "Discover",
-        "Change": "Modify",
-        "Start": "Initiate",
-    }
-    
-    # 1. 常见短语替换
-    phrases = {
-        r"\bIn order to\b": "To",
-        r"\bIt is important to note that\b": "Notably,",
-        r"\bThe results show that\b": "The findings demonstrate that",
-        r"\bDue to the fact that\b": "Because",
-    }
-    
+    synonym_sets = [
+        {
+            "However": "Nevertheless",
+            "Therefore": "Consequently",
+            "Furthermore": "Moreover",
+            "Thus": "Hence",
+            "Because": "Since",
+            "Important": "Critical",
+            "Significant": "Substantial",
+            "Necessary": "Essential",
+            "Show": "Demonstrate",
+            "Use": "Utilize",
+            "Improve": "Enhance",
+            "Result": "Outcome",
+            "Method": "Approach",
+            "Data": "Information",
+            "Small": "Marginal",
+            "Large": "Extensive",
+            "Find": "Discover",
+            "Change": "Modify",
+            "Start": "Initiate",
+        },
+        {
+            "Nevertheless": "Nonetheless",
+            "Consequently": "As a result",
+            "Moreover": "In addition",
+            "Hence": "Accordingly",
+            "Since": "Given that",
+            "Critical": "Crucial",
+            "Substantial": "Considerable",
+            "Essential": "Vital",
+            "Demonstrate": "Illustrate",
+            "Utilize": "Employ",
+            "Enhance": "Strengthen",
+            "Outcome": "Consequence",
+            "Approach": "Strategy",
+            "Information": "Evidence",
+            "Marginal": "Minor",
+            "Extensive": "Comprehensive",
+            "Discover": "Identify",
+            "Modify": "Adjust",
+            "Initiate": "Commence",
+        },
+        {
+            "Nonetheless": "Even so",
+            "As a result": "For this reason",
+            "In addition": "Additionally",
+            "Accordingly": "For that reason",
+            "Given that": "In light of the fact that",
+            "Crucial": "Pivotal",
+            "Considerable": "Noteworthy",
+            "Vital": "Indispensable",
+            "Illustrate": "Exemplify",
+            "Employ": "Leverage",
+            "Strengthen": "Reinforce",
+            "Consequence": "Implication",
+            "Strategy": "Framework",
+            "Evidence": "Empirical data",
+            "Minor": "Negligible",
+            "Comprehensive": "Thorough",
+            "Identify": "Pinpoint",
+            "Adjust": "Refine",
+            "Commence": "Originate",
+        },
+    ]
+
+    phrase_sets = [
+        {
+            r"\bIn order to\b": "To",
+            r"\bIt is important to note that\b": "Notably,",
+            r"\bThe results show that\b": "The findings demonstrate that",
+            r"\bDue to the fact that\b": "Because",
+        },
+        {
+            r"\bIn order to\b": "For the purpose of",
+            r"\bIt is important to note that\b": "It should be highlighted that",
+            r"\bThe results show that\b": "Empirical evidence indicates that",
+            r"\bDue to the fact that\b": "Owing to the reality that",
+        },
+        {
+            r"\bIn order to\b": "With the intention of",
+            r"\bIt is important to note that\b": "A key observation is that",
+            r"\bThe results show that\b": "Analysis of the data reveals that",
+            r"\bDue to the fact that\b": "As a consequence of the understanding that",
+        },
+    ]
+
+    synonyms = synonym_sets[iteration % len(synonym_sets)]
+    phrases = phrase_sets[iteration % len(phrase_sets)]
+
     result = text
     for pattern, replacement in phrases.items():
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-    
-    # 2. 单词逐个替换
+
     words = result.split()
     rewritten_words = []
-    
+    random.seed(iteration * 9973 + hash(text[:10]) % 10000)
+
     for word in words:
-        # 分离前缀、核心词、后缀标点
         match = re.match(r"^([^\w]*)([\w'-]+)([^\w]*)$", word)
         if match:
             prefix, clean_word, suffix = match.groups()
-            
+
             replacement = None
             if clean_word in synonyms:
                 replacement = synonyms[clean_word]
@@ -71,9 +131,8 @@ def _simulated_rewrite(text: str) -> str:
                 replacement = synonyms[clean_word.capitalize()]
             elif clean_word.lower() in synonyms:
                 replacement = synonyms[clean_word.lower()]
-                
-            if replacement:
-                # 保持大小写
+
+            if replacement and random.random() < 0.85:
                 if clean_word.istitle():
                     replacement = replacement.capitalize()
                 elif clean_word.isupper():
@@ -85,7 +144,7 @@ def _simulated_rewrite(text: str) -> str:
                 rewritten_words.append(word)
         else:
             rewritten_words.append(word)
-            
+
     return " ".join(rewritten_words)
 
 def rewrite_text_with_context(text: str, prev_context: str = "", next_context: str = "", level: str = "medium", protected_terms: Optional[List[Dict[str, Any]]] = None):
@@ -177,16 +236,17 @@ OUTPUT: Provide ONLY the rewritten text of the target paragraph, no explanations
         return _simulated_rewrite(text)
 
 
-def rewrite_text(text: str, level: str = "medium", protected_terms: Optional[List[Dict[str, Any]]] = None):
+def rewrite_text(text: str, level: str = "medium", protected_terms: Optional[List[Dict[str, Any]]] = None, iteration: int = 0):
     """
     Rewrites academic text using Groq API while preserving technical terms and structure.
     Levels: low, medium, high
     protected_terms: 用户自定义术语词典，格式为 [{"term": "xxx", "category": "xxx", ...}, ...]
+    iteration: 当前迭代轮次，用于降级模式下产生差异化结果
     """
     
     if not GROQ_API_KEY:
         print("⚠️ 未配置 GROQ_API_KEY，切换到降级方案（模拟改写）")
-        return _simulated_rewrite(text)
+        return _simulated_rewrite(text, iteration=iteration)
     
     prompts = {
         "low": "Perform slight synonym replacement and minor sentence restructuring to improve flow while maintaining the original tone.",
@@ -316,12 +376,13 @@ async def _simulated_async_stream(
     text: str,
     chunk_size: int = 2,
     delay: float = 0.015,
-    is_aborted: Optional[Callable[[], bool]] = None
+    is_aborted: Optional[Callable[[], bool]] = None,
+    iteration: int = 0
 ) -> AsyncGenerator[str, None]:
     """
     降级模式下异步模拟流式输出，按字符分片 yield，模拟打字机效果
     """
-    rewritten = _simulated_rewrite(text)
+    rewritten = _simulated_rewrite(text, iteration=iteration)
     for i in range(0, len(rewritten), chunk_size):
         if is_aborted and is_aborted():
             return
@@ -349,15 +410,17 @@ async def rewrite_text_stream(
     text: str,
     level: str = "medium",
     is_aborted: Optional[Callable[[], bool]] = None,
-    protected_terms: Optional[List[Dict[str, Any]]] = None
+    protected_terms: Optional[List[Dict[str, Any]]] = None,
+    iteration: int = 0
 ) -> AsyncGenerator[str, None]:
     """
     流式改写学术文本，逐 token yield 改写结果
     支持降级模式和中止信号
+    iteration: 当前迭代轮次，用于降级模式下产生差异化结果
     """
     if not GROQ_API_KEY:
         print("⚠️ 未配置 GROQ_API_KEY，切换到降级方案（模拟流式改写）")
-        async for chunk in _simulated_async_stream(text, is_aborted=is_aborted):
+        async for chunk in _simulated_async_stream(text, is_aborted=is_aborted, iteration=iteration):
             yield chunk
         return
 
@@ -413,7 +476,7 @@ async def rewrite_text_stream(
 
     except Exception as e:
         print(f"❌ Groq API 流式调用失败: {str(e)}，启动降级方案")
-        async for chunk in _simulated_async_stream(text, is_aborted=is_aborted):
+        async for chunk in _simulated_async_stream(text, is_aborted=is_aborted, iteration=iteration):
             yield chunk
 
 
