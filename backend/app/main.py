@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import uuid
@@ -9,23 +9,27 @@ import psutil
 import os
 import time
 import requests
+from datetime import datetime
 
 try:
     from app.parser import extract_text
     from app.detector import detect_ai_content, detect_ai_content_advanced
     from app.rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
     from app.structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
+    from app.pdf_report import generate_pdf_report
 except ImportError:
     try:
         from .parser import extract_text
         from .detector import detect_ai_content, detect_ai_content_advanced
         from .rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
         from .structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
+        from .pdf_report import generate_pdf_report
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content, detect_ai_content_advanced
         from rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
         from structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
+        from pdf_report import generate_pdf_report
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -79,6 +83,21 @@ class RewriteChapterPayload(BaseModel):
     full_text: str
     section: dict
     level: str = "medium"
+
+
+class PDFReportPayload(BaseModel):
+    project_name: str = "学术论文检测"
+    detection_time: Optional[str] = None
+    overall_ai_score: float = 0.0
+    details: List[Dict[str, Any]] = []
+    original_text: str = ""
+    rewritten_text: str = ""
+    detection_model: str = "distilbert-base-uncased"
+    rewrite_model: str = "llama-3.3-70b-versatile"
+    rewrite_level: str = "medium"
+    iterations: int = 1
+    bootstrap_samples: int = 5
+    degraded: bool = False
 
 
 def smart_split_paragraphs(text: str) -> List[str]:
@@ -901,6 +920,48 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/api/generate-report")
+async def generate_report(payload: PDFReportPayload):
+    try:
+        report_data = payload.dict()
+
+        if not report_data.get("detection_time"):
+            report_data["detection_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        details = report_data.get("details", [])
+        for d in details:
+            ai_score = d.get("ai_score", 0)
+            if isinstance(ai_score, float) and ai_score <= 1:
+                d["ai_score"] = ai_score * 100
+
+        if not report_data.get("overall_ai_score") and details:
+            total_weight = 0
+            weighted_sum = 0.0
+            for d in details:
+                w = max(1, len(d.get("text", "")))
+                total_weight += w
+                weighted_sum += d.get("ai_score", 0) * w
+            report_data["overall_ai_score"] = weighted_sum / total_weight if total_weight > 0 else 0
+
+        pdf_bytes = generate_pdf_report(report_data)
+
+        filename = f"PaperWise_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+                "X-Suggested-Filename": filename,
+            },
+        )
+    except Exception as e:
+        import traceback
+        print(f"[PDF] 生成报告异常: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)}")
 
 
 if __name__ == "__main__":

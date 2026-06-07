@@ -483,6 +483,8 @@ function App() {
   const [showSectionOriginal, setShowSectionOriginal] = useState({});
   const [analyzingStructure, setAnalyzingStructure] = useState(false);
 
+  const [generatingReport, setGeneratingReport] = useState(false);
+
   const [tourOpen, setTourOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
 
@@ -1140,6 +1142,117 @@ function App() {
     a.click();
   };
 
+  const handleGenerateReport = async (source) => {
+    if (generatingReport) return;
+
+    let original_text = '';
+    let rewritten_text = '';
+    let report_details = [];
+    let overall_score = 0;
+    let degraded = false;
+    let iterations = 1;
+
+    if (source === 'selective' && selectiveRewriteResult) {
+      original_text = selectiveRewriteResult.paragraphs
+        ? [...selectiveRewriteResult.paragraphs].sort((a, b) => a.id - b.id).map(p => p.original_text).join('\n\n')
+        : text;
+      rewritten_text = selectiveRewriteResult.combined_text || '';
+      if (selectiveRewriteResult.detection_after) {
+        overall_score = selectiveRewriteResult.detection_after.overall_ai_score || 0;
+        report_details = selectiveRewriteResult.detection_after.details || [];
+        degraded = selectiveRewriteResult.detection_after.degraded || false;
+      } else if (result) {
+        overall_score = result.overall_ai_score || 0;
+        report_details = result.details || [];
+        degraded = result.degraded || false;
+      }
+    } else if (source === 'rewrite' && rewriteResult) {
+      original_text = rewriteResult.original_text || text;
+      rewritten_text = rewriteResult.rewritten_text || '';
+      iterations = rewriteResult.iterations || 1;
+      if (rewriteResult.detection_after) {
+        overall_score = rewriteResult.detection_after.overall_ai_score || 0;
+        report_details = rewriteResult.detection_after.details || [];
+        degraded = rewriteResult.detection_after.degraded || false;
+      } else if (result) {
+        overall_score = result.overall_ai_score || 0;
+        report_details = result.details || [];
+        degraded = result.degraded || false;
+      }
+    } else {
+      if (!result) {
+        alert('请先执行检测后再生成报告');
+        return;
+      }
+      original_text = text;
+      rewritten_text = '';
+      overall_score = result.overall_ai_score || 0;
+      report_details = result.details || [];
+      degraded = result.degraded || false;
+    }
+
+    if (!report_details || report_details.length === 0) {
+      report_details = [{ text: original_text.substring(0, 500), ai_score: overall_score / 100 }];
+    }
+
+    setGeneratingReport(true);
+    try {
+      const payload = {
+        project_name: '学术论文 AIGC 检测报告',
+        detection_time: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
+        overall_ai_score: overall_score,
+        details: report_details,
+        original_text: original_text,
+        rewritten_text: rewritten_text,
+        detection_model: 'distilbert-base-uncased',
+        rewrite_model: 'llama-3.3-70b-versatile',
+        rewrite_level: rewriteLevel,
+        iterations: iterations,
+        bootstrap_samples: bootstrapSamples,
+        degraded: degraded,
+      };
+
+      const response = await axios.post(`${API_BASE}/generate-report`, payload, {
+        responseType: 'blob',
+        timeout: 60000,
+      });
+
+      const disposition = response.headers['content-disposition'] || response.headers['x-suggested-filename'];
+      let filename = `PaperWise_Report_${Date.now()}.pdf`;
+      if (disposition) {
+        const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^"';\s]+)["']?/i);
+        if (match && match[1]) {
+          filename = decodeURIComponent(match[1]);
+        }
+      }
+
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error('PDF report generation failed:', err);
+      let msg = '报告生成失败';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const txt = await err.response.data.text();
+          const parsed = JSON.parse(txt);
+          msg = parsed.detail || msg;
+        } catch (_) {}
+      } else if (err.message) {
+        msg = err.message;
+      }
+      alert(msg);
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
   const hasAdvancedStats = result && result.details && result.details[0] && result.details[0].mean !== undefined;
 
   return (
@@ -1557,6 +1670,23 @@ function App() {
                       <p className="text-slate-400 text-sm">基于 RoBERTa 及语义突发性检测引擎 · Bootstrap 置信区间</p>
                     </div>
                     <div className="flex items-center gap-6 flex-wrap">
+                      <button
+                        onClick={() => handleGenerateReport(rewriteResult ? 'rewrite' : (selectiveRewriteResult ? 'selective' : 'detect'))}
+                        disabled={generatingReport}
+                        className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-slate-700 disabled:to-slate-700 disabled:cursor-not-allowed text-white rounded-xl font-bold transition-all shadow-lg shadow-indigo-500/20 disabled:shadow-none border border-indigo-500/30 disabled:border-slate-600"
+                      >
+                        {generatingReport ? (
+                          <>
+                            <RefreshCcw className="w-4 h-4 animate-spin" />
+                            <span className="text-sm">生成中...</span>
+                          </>
+                        ) : (
+                          <>
+                            <FileText className="w-4 h-4" />
+                            <span className="text-sm">生成完整检测报告 (PDF)</span>
+                          </>
+                        )}
+                      </button>
                       <OverallCredibility result={result} disabled={isDegraded} />
                       {hasAdvancedStats && (
                         <TimeComparison
@@ -1832,14 +1962,33 @@ function App() {
                               </>
                             )}
                           </h3>
-                          <button
-                            id="tour-export-btn"
-                            onClick={handleExport}
-                            className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
-                          >
-                            <FileDown className="w-3 h-3" />
-                            导出 [{getVersionLabel(selectedVersionA)}]
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              id="tour-export-btn"
+                              onClick={handleExport}
+                              className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
+                            >
+                              <FileDown className="w-3 h-3" />
+                              导出 [{getVersionLabel(selectedVersionA)}]
+                            </button>
+                            <button
+                              onClick={() => handleGenerateReport('rewrite')}
+                              disabled={generatingReport}
+                              className="text-xs flex items-center gap-1 px-3 py-1.5 rounded-lg border transition-all disabled:cursor-not-allowed disabled:opacity-50 bg-indigo-600/20 border-indigo-500/40 text-indigo-300 hover:bg-indigo-600/30 hover:border-indigo-500/60 disabled:bg-slate-700/40 disabled:border-slate-600 disabled:text-slate-500"
+                            >
+                              {generatingReport ? (
+                                <>
+                                  <RefreshCcw className="w-3 h-3 animate-spin" />
+                                  生成中
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-3 h-3" />
+                                  PDF 报告
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
                         <div className="text-sm leading-relaxed h-[460px] overflow-y-auto pr-4 flex-1">
                           {viewMode === 'single' ? (
@@ -1890,13 +2039,32 @@ function App() {
                           · 蓝色边线=已改写，灰色边线=未改写
                         </span>
                       </h3>
-                      <button
-                        onClick={handleExportSelective}
-                        className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
-                      >
-                        <FileDown className="w-3 h-3" />
-                        导出结果
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleExportSelective}
+                          className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg border border-slate-700 hover:border-slate-600"
+                        >
+                          <FileDown className="w-3 h-3" />
+                          导出结果
+                        </button>
+                        <button
+                          onClick={() => handleGenerateReport('selective')}
+                          disabled={generatingReport}
+                          className="text-xs flex items-center gap-1 px-3 py-1.5 rounded-lg border transition-all disabled:cursor-not-allowed disabled:opacity-50 bg-cyan-600/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-600/30 hover:border-cyan-500/60 disabled:bg-slate-700/40 disabled:border-slate-600 disabled:text-slate-500"
+                        >
+                          {generatingReport ? (
+                            <>
+                              <RefreshCcw className="w-3 h-3 animate-spin" />
+                              生成中
+                            </>
+                          ) : (
+                            <>
+                              <FileText className="w-3 h-3" />
+                              PDF 报告
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-3 max-h-[640px] overflow-y-auto pr-2">
                       {[...selectiveRewriteResult.paragraphs]
