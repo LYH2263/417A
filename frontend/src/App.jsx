@@ -13,6 +13,9 @@ import { createSSEClient } from './utils/sseClient';
 import TourGuide from './components/TourGuide';
 import ChangelogModal from './components/ChangelogModal';
 import changelogData from './data/changelog.json';
+import { useHealthCheck } from './hooks/useHealthCheck';
+import { SystemStatusIndicator } from './components/SystemStatusIndicator';
+import { ToastContainer } from './components/Toast';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -442,6 +445,18 @@ function TimeComparison({ elapsedMs, sampleCount, disabled }) {
 }
 
 function App() {
+  const {
+    healthData,
+    overallStatus,
+    isOffline,
+    isReconnecting,
+    consecutiveFailures,
+    lastCheck,
+    toasts,
+    removeToast,
+    forceReconnect
+  } = useHealthCheck();
+
   const [file, setFile] = useState(null);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -586,6 +601,10 @@ function App() {
   };
 
   const handleRewriteSection = async (section) => {
+    if (isOffline) {
+      alert("离线模式下无法执行改写操作，请先恢复网络连接");
+      return;
+    }
     if (quota <= 0) {
       alert("今日额度已用完，请明天再试或升级账户。");
       return;
@@ -1125,7 +1144,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-indigo-500/30 pb-20">
-      <nav className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
+      <nav className={`border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky z-50 ${isOffline ? 'top-10' : 'top-0'}`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={resetAll}>
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -1134,6 +1153,15 @@ function App() {
             <span className="text-xl font-bold tracking-tight text-white italic">Paper<span className="text-indigo-500 font-black">Wise</span></span>
           </div>
           <div className="flex items-center gap-4">
+            <SystemStatusIndicator
+              overallStatus={overallStatus}
+              healthData={healthData}
+              isOffline={isOffline}
+              isReconnecting={isReconnecting}
+              lastCheck={lastCheck}
+              consecutiveFailures={consecutiveFailures}
+              onForceReconnect={forceReconnect}
+            />
             <div className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
               今日额度: <span className={quota > 3 ? "text-indigo-400" : "text-red-400"}>{quota}/10</span>
             </div>
@@ -1222,9 +1250,12 @@ function App() {
                     </div>
                     <div className="relative group">
                       <button
-                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${loading ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'hover:bg-slate-800 text-slate-400 hover:text-white'
-                          }`}
-                        disabled={loading}
+                        className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                          (loading || isOffline)
+                            ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                            : 'hover:bg-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                        disabled={loading || isOffline}
                       >
                         {loading ? (
                           <>
@@ -1237,13 +1268,18 @@ function App() {
                             上传文件
                           </>
                         )}
+                        {isOffline && !loading && (
+                          <span className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-950 text-red-400 text-[10px] px-2 py-1 rounded border border-red-500/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                            离线模式下不可用
+                          </span>
+                        )}
                       </button>
                       <input
                         type="file"
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
                         onChange={handleFileUpload}
                         accept=".pdf,.docx,.txt"
-                        disabled={loading}
+                        disabled={loading || isOffline}
                       />
                     </div>
                     <div className="flex items-center gap-2 pl-2 ml-2 border-l border-slate-700">
@@ -1434,30 +1470,45 @@ function App() {
                 <div id="tour-detect-btn" className="flex gap-3 flex-wrap items-center">
                   <button
                     onClick={handleDetectText}
-                    disabled={loading || !text.trim() || rewriting}
-                    className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all border border-slate-700"
+                    disabled={loading || !text.trim() || rewriting || isOffline}
+                    className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all border border-slate-700 disabled:cursor-not-allowed relative group"
                   >
                     {loading ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
                     仅检测 AI 率
+                    {isOffline && (
+                      <span className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-950 text-red-400 text-[10px] px-2 py-1 rounded border border-red-500/30 opacity-0 group-hover:opacity-100 transition-opacity">
+                        离线模式下不可用
+                      </span>
+                    )}
                   </button>
                   {!rewriting ? (
                     paragraphMode ? (
                       <button
                         onClick={handleSelectiveRewrite}
-                        disabled={rewriting || !paragraphs.some(p => p.selected && !p.locked)}
-                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                        disabled={rewriting || !paragraphs.some(p => p.selected && !p.locked) || isOffline}
+                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20 disabled:cursor-not-allowed relative group"
                       >
                         <Zap className="w-4 h-4" />
                         逐段选择性改写
+                        {isOffline && (
+                          <span className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-950 text-red-400 text-[10px] px-2 py-1 rounded border border-red-500/30 opacity-0 group-hover:opacity-100 transition-opacity">
+                            离线模式下不可用
+                          </span>
+                        )}
                       </button>
                     ) : (
                       <button
                         onClick={handleRewrite}
-                        disabled={rewriting || !text.trim()}
-                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20"
+                        disabled={rewriting || !text.trim() || isOffline}
+                        className="flex items-center gap-2 px-8 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-bold transition-all shadow-xl shadow-indigo-500/20 disabled:cursor-not-allowed relative group"
                       >
                         <Zap className="w-4 h-4" />
                         一键人性化改写
+                        {isOffline && (
+                          <span className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap bg-slate-950 text-red-400 text-[10px] px-2 py-1 rounded border border-red-500/30 opacity-0 group-hover:opacity-100 transition-opacity">
+                            离线模式下不可用
+                          </span>
+                        )}
                       </button>
                     )
                   ) : (
@@ -1907,6 +1958,7 @@ function App() {
         isOpen={changelogOpen}
         onClose={() => setChangelogOpen(false)}
       />
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
   );
 }

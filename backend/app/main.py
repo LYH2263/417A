@@ -2,9 +2,13 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uuid
 import json
+import psutil
+import os
+import time
+import requests
 
 try:
     from app.parser import extract_text
@@ -233,6 +237,285 @@ async def rewrite(payload: RewritePayload):
 @app.get("/")
 async def root():
     return {"message": "Welcome to the Academic AIGC Helper API"}
+
+
+def _classify_status(healthy: bool, degraded_condition: bool = False) -> str:
+    if not healthy:
+        return "down"
+    if degraded_condition:
+        return "degraded"
+    return "healthy"
+
+
+def _check_disk_space() -> Dict[str, Any]:
+    try:
+        usage = psutil.disk_usage(os.getcwd())
+        free_pct = 100 - usage.percent
+        if free_pct < 5:
+            status = "down"
+        elif free_pct < 15:
+            status = "degraded"
+        else:
+            status = "healthy"
+        return {
+            "status": status,
+            "details": {
+                "total_gb": round(usage.total / (1024 ** 3), 2),
+                "used_gb": round(usage.used / (1024 ** 3), 2),
+                "free_gb": round(usage.free / (1024 ** 3), 2),
+                "used_percent": usage.percent,
+                "free_percent": round(free_pct, 2)
+            }
+        }
+    except Exception as e:
+        return {"status": "down", "details": {"error": str(e)}}
+
+
+def _check_memory() -> Dict[str, Any]:
+    try:
+        mem = psutil.virtual_memory()
+        used_pct = mem.percent
+        if used_pct > 95:
+            status = "down"
+        elif used_pct > 85:
+            status = "degraded"
+        else:
+            status = "healthy"
+        return {
+            "status": status,
+            "details": {
+                "total_gb": round(mem.total / (1024 ** 3), 2),
+                "available_gb": round(mem.available / (1024 ** 3), 2),
+                "used_gb": round(mem.used / (1024 ** 3), 2),
+                "used_percent": used_pct
+            }
+        }
+    except Exception as e:
+        return {"status": "down", "details": {"error": str(e)}}
+
+
+def _check_ai_model() -> Dict[str, Any]:
+    try:
+        from app.detector import get_detector, is_model_degraded
+    except ImportError:
+        try:
+            from detector import get_detector, is_model_degraded
+        except ImportError:
+            return {"status": "down", "details": {"error": "无法加载 detector 模块"}}
+
+    try:
+        detector = get_detector()
+        if detector is None:
+            return {
+                "status": "degraded",
+                "details": {
+                    "loaded": False,
+                    "note": "模型未加载或加载失败，当前使用降级模拟模式"
+                }
+            }
+        degraded = is_model_degraded(detector)
+        if degraded:
+            return {
+                "status": "degraded",
+                "details": {
+                    "loaded": True,
+                    "degraded": True,
+                    "note": "模型已加载但处于降级状态"
+                }
+            }
+        try:
+            test_result = detector("test")
+            if test_result and len(test_result) > 0:
+                return {
+                    "status": "healthy",
+                    "details": {
+                        "loaded": True,
+                        "degraded": False,
+                        "model_type": type(detector).__name__,
+                        "inference_ok": True
+                    }
+                }
+        except Exception as infer_err:
+            return {
+                "status": "degraded",
+                "details": {
+                    "loaded": True,
+                    "inference_ok": False,
+                    "error": str(infer_err)
+                }
+            }
+        return {
+            "status": "healthy",
+            "details": {
+                "loaded": True,
+                "degraded": False
+            }
+        }
+    except Exception as e:
+        return {"status": "down", "details": {"error": str(e)}}
+
+
+def _check_groq_api() -> Dict[str, Any]:
+    try:
+        from app.rewriter import GROQ_API_KEY, MODEL_NAME
+    except ImportError:
+        try:
+            from rewriter import GROQ_API_KEY, MODEL_NAME
+        except ImportError:
+            return {"status": "down", "details": {"error": "无法加载 rewriter 模块"}}
+
+    if not GROQ_API_KEY:
+        return {
+            "status": "degraded",
+            "details": {
+                "configured": False,
+                "note": "未配置 GROQ_API_KEY，当前使用降级模拟改写"
+            }
+        }
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        start = time.time()
+        response = requests.get(
+            "https://api.groq.com/openai/v1/models",
+            headers=headers,
+            timeout=8
+        )
+        elapsed_ms = round((time.time() - start) * 1000, 1)
+
+        if response.status_code == 200:
+            data = response.json()
+            model_available = any(
+                m.get("id") == MODEL_NAME for m in data.get("data", [])
+            ) if isinstance(data, dict) else False
+            if model_available:
+                return {
+                    "status": "healthy",
+                    "details": {
+                        "configured": True,
+                        "model": MODEL_NAME,
+                        "latency_ms": elapsed_ms,
+                        "reachable": True
+                    }
+                }
+            else:
+                return {
+                    "status": "degraded",
+                    "details": {
+                        "configured": True,
+                        "model": MODEL_NAME,
+                        "latency_ms": elapsed_ms,
+                        "reachable": True,
+                        "note": f"模型 {MODEL_NAME} 未在可用模型列表中"
+                    }
+                }
+        elif response.status_code == 401:
+            return {
+                "status": "down",
+                "details": {
+                    "configured": True,
+                    "reachable": True,
+                    "error": "API Key 无效 (401 Unauthorized)"
+                }
+            }
+        elif response.status_code == 429:
+            return {
+                "status": "degraded",
+                "details": {
+                    "configured": True,
+                    "reachable": True,
+                    "error": "请求频率超限 (429 Too Many Requests)"
+                }
+            }
+        else:
+            return {
+                "status": "degraded",
+                "details": {
+                    "configured": True,
+                    "reachable": True,
+                    "status_code": response.status_code,
+                    "error": f"HTTP {response.status_code}"
+                }
+            }
+    except requests.exceptions.Timeout:
+        return {
+            "status": "degraded",
+            "details": {
+                "configured": True,
+                "reachable": False,
+                "error": "请求超时"
+            }
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "status": "down",
+            "details": {
+                "configured": True,
+                "reachable": False,
+                "error": "无法连接到 Groq API"
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "down",
+            "details": {
+                "configured": True,
+                "error": str(e)
+            }
+        }
+
+
+def _check_api_connectivity() -> Dict[str, Any]:
+    return {
+        "status": "healthy",
+        "details": {
+            "uptime_seconds": round(time.time() - _start_time, 1),
+            "version": "1.0.0"
+        }
+    }
+
+
+_start_time = time.time()
+
+
+@app.get("/api/health")
+async def health_check():
+    api_status = _check_api_connectivity()
+    ai_model_status = _check_ai_model()
+    groq_status = _check_groq_api()
+    disk_status = _check_disk_space()
+    memory_status = _check_memory()
+
+    all_statuses = [
+        api_status["status"],
+        ai_model_status["status"],
+        groq_status["status"],
+        disk_status["status"],
+        memory_status["status"]
+    ]
+
+    if "down" in all_statuses:
+        overall = "down"
+    elif "degraded" in all_statuses:
+        overall = "degraded"
+    else:
+        overall = "healthy"
+
+    return {
+        "overall_status": overall,
+        "timestamp": time.time(),
+        "services": {
+            "api_connectivity": api_status,
+            "ai_model": ai_model_status,
+            "groq_api": groq_status,
+            "disk_space": disk_status,
+            "memory": memory_status
+        }
+    }
+
 
 @app.post("/api/detect-text")
 async def detect_text(payload: TextPayload):

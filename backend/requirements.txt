@@ -7,4 +7,5 @@ python-dotenv
 requests
 pydantic
 aiofiles
+psutil
 # 运行时手动安装 transformers, 我们会在 Dockerfile 优化
