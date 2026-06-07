@@ -1,6 +1,7 @@
 import io
 import os
 import platform
+import re
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -13,63 +14,114 @@ from reportlab.platypus import (
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 
 _CJK_FONT_NAMES = []
+_CJK_BOLD_FONT_NAMES = []
 
 
 def _register_cjk_fonts():
-    global _CJK_FONT_NAMES
+    global _CJK_FONT_NAMES, _CJK_BOLD_FONT_NAMES
     if _CJK_FONT_NAMES:
         return _CJK_FONT_NAMES
 
-    cjk_candidates = []
+    registered = []
+    registered_bold = []
 
     system = platform.system()
+    cjk_candidates = []
+
     if system == "Windows":
         windir = os.environ.get("WINDIR", r"C:\Windows")
         font_dir = os.path.join(windir, "Fonts")
         cjk_candidates = [
-            ("MSYH", os.path.join(font_dir, "msyh.ttc")),
-            ("MSYHBD", os.path.join(font_dir, "msyhbd.ttc")),
-            ("SIMSUN", os.path.join(font_dir, "simsun.ttc")),
-            ("SIMHEI", os.path.join(font_dir, "simhei.ttf")),
+            ("MSYH", os.path.join(font_dir, "msyh.ttc"), False),
+            ("MSYHBD", os.path.join(font_dir, "msyhbd.ttc"), True),
+            ("MSYH", os.path.join(font_dir, "msyh.ttf"), False),
+            ("SIMHEI", os.path.join(font_dir, "simhei.ttf"), True),
+            ("SIMSUN", os.path.join(font_dir, "simsun.ttc"), False),
+            ("SIMSUN", os.path.join(font_dir, "simsun.ttf"), False),
         ]
     elif system == "Darwin":
         font_dirs = ["/System/Library/Fonts", "/Library/Fonts", os.path.expanduser("~/Library/Fonts")]
         for fd in font_dirs:
             cjk_candidates.extend([
-                ("PingFang", os.path.join(fd, "PingFang.ttc")),
-                ("STHeiti", os.path.join(fd, "STHeiti Medium.ttc")),
-                ("HeitiSC", os.path.join(fd, "Heiti SC.ttc")),
-                ("SongtiSC", os.path.join(fd, "Songti SC.ttc")),
-                ("ArialUnicode", os.path.join(fd, "Arial Unicode.ttf")),
-                ("ArialUnicodeMS", os.path.join(fd, "Arial Unicode MS.ttf")),
+                ("PingFangSC", os.path.join(fd, "PingFang.ttc"), False),
+                ("PingFangSCBold", os.path.join(fd, "PingFang.ttc"), True),
+                ("HeitiSC", os.path.join(fd, "Heiti SC.ttc"), True),
+                ("HeitiSCLight", os.path.join(fd, "Heiti SC.ttc"), False),
+                ("STHeiti", os.path.join(fd, "STHeiti Medium.ttc"), True),
+                ("SongtiSC", os.path.join(fd, "Songti SC.ttc"), False),
+                ("ArialUnicodeMS", os.path.join(fd, "Arial Unicode MS.ttf"), False),
             ])
     else:
         font_dirs = ["/usr/share/fonts", "/usr/local/share/fonts", os.path.expanduser("~/.fonts")]
         for fd in font_dirs:
             cjk_candidates.extend([
-                ("NotoSansCJK", os.path.join(fd, "truetype/noto/NotoSansCJK-Regular.ttc")),
-                ("NotoSerifCJK", os.path.join(fd, "truetype/noto/NotoSerifCJK-Regular.ttc")),
-                ("WenQuanYi", os.path.join(fd, "truetype/wqy/wqy-microhei.ttc")),
-                ("DroidSansFallback", os.path.join(fd, "truetype/droid/DroidSansFallbackFull.ttf")),
+                ("NotoSansCJK", os.path.join(fd, "truetype/noto/NotoSansCJK-Regular.ttc"), False),
+                ("NotoSansCJKBold", os.path.join(fd, "truetype/noto/NotoSansCJK-Bold.ttc"), True),
+                ("NotoSerifCJK", os.path.join(fd, "truetype/noto/NotoSerifCJK-Regular.ttc"), False),
+                ("WenQuanYiHei", os.path.join(fd, "truetype/wqy/wqy-zenhei.ttc"), True),
+                ("WenQuanYiMicro", os.path.join(fd, "truetype/wqy/wqy-microhei.ttc"), False),
+                ("DroidSansFallback", os.path.join(fd, "truetype/droid/DroidSansFallbackFull.ttf"), False),
+                ("NotoSansCJK", os.path.join(fd, "opentype/noto/NotoSansCJK-Regular.ttc"), False),
+                ("NotoSansCJKBold", os.path.join(fd, "opentype/noto/NotoSansCJK-Bold.ttc"), True),
             ])
 
-    registered = []
-    for name, path in cjk_candidates:
-        if os.path.exists(path):
-            try:
+    for name, path, is_bold in cjk_candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            if path.lower().endswith(".ttc"):
+                try:
+                    pdfmetrics.registerFont(TTFont(name, path, subfontIndex=0))
+                except Exception:
+                    try:
+                        pdfmetrics.registerFont(TTFont(name, path, subfontIndex=1))
+                    except Exception:
+                        pdfmetrics.registerFont(TTFont(name, path))
+            else:
                 pdfmetrics.registerFont(TTFont(name, path))
+
+            if is_bold:
+                registered_bold.append(name)
+            else:
                 registered.append(name)
-                print(f"[PDF] 注册 CJK 字体成功: {name} ({path})")
-            except Exception as e:
-                print(f"[PDF] 注册字体失败 {name}: {e}")
+            print(f"[PDF] 注册 CJK 字体成功: {name} ({path})")
+        except Exception as e:
+            print(f"[PDF] 注册字体失败 {name} ({path}): {e}")
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        registered.append("STSong-Light")
+        print("[PDF] 注册 CID 字体成功: STSong-Light (PDF 内建中文字体)")
+    except Exception as e:
+        print(f"[PDF] CID 字体 STSong-Light 注册失败: {e}")
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STHeiti"))
+        registered_bold.append("STHeiti")
+        print("[PDF] 注册 CID 字体成功: STHeiti (PDF 内建中文字体)")
+    except Exception as e:
+        print(f"[PDF] CID 字体 STHeiti 注册失败: {e}")
+
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STKaiti"))
+        if not registered:
+            registered.append("STKaiti")
+        print("[PDF] 注册 CID 字体成功: STKaiti")
+    except Exception as e:
+        print(f"[PDF] CID 字体 STKaiti 注册失败: {e}")
 
     if not registered:
-        print("[PDF] 警告: 未找到任何 CJK 字体，中文可能无法正常显示")
+        print("[PDF] 警告: 未注册到任何中文字体，中文可能显示为方块或乱码")
+        registered = ["Helvetica"]
+    if not registered_bold:
+        registered_bold = registered
 
     _CJK_FONT_NAMES = registered
+    _CJK_BOLD_FONT_NAMES = registered_bold
     return registered
 
 
@@ -79,10 +131,10 @@ def _get_font():
 
 
 def _get_bold_font():
-    fonts = _register_cjk_fonts()
-    if len(fonts) >= 2:
-        return fonts[1]
-    return fonts[0] if fonts else "Helvetica-Bold"
+    _register_cjk_fonts()
+    if _CJK_BOLD_FONT_NAMES:
+        return _CJK_BOLD_FONT_NAMES[0]
+    return _CJK_FONT_NAMES[0] if _CJK_FONT_NAMES else "Helvetica-Bold"
 
 
 COLOR_PRIMARY = HexColor("#4F46E5")
@@ -98,6 +150,8 @@ COLOR_TEXT = HexColor("#1E293B")
 COLOR_MUTED = HexColor("#64748B")
 COLOR_BORDER = HexColor("#E2E8F0")
 COLOR_BG_ALT = HexColor("#F8FAFC")
+
+MAX_CHUNK_CHARS = 180
 
 
 def _risk_color(score_pct):
@@ -141,6 +195,34 @@ def _escape_xml(text):
             .replace(">", "&gt;"))
 
 
+def _split_text_chunks(text, max_chars=MAX_CHUNK_CHARS):
+    if not text:
+        return [""]
+    if len(text) <= max_chars:
+        return [text]
+    chunks = []
+    i = 0
+    while i < len(text):
+        end = min(i + max_chars, len(text))
+        if end < len(text):
+            punct = max(
+                text.rfind("。", i, end),
+                text.rfind("！", i, end),
+                text.rfind("？", i, end),
+                text.rfind(".", i, end),
+                text.rfind("!", i, end),
+                text.rfind("?", i, end),
+                text.rfind("；", i, end),
+                text.rfind(";", i, end),
+                text.rfind("\n", i, end),
+            )
+            if punct > i and punct >= end - max_chars // 3:
+                end = punct + 1
+        chunks.append(text[i:end].strip())
+        i = end
+    return [c for c in chunks if c]
+
+
 class NumberedCanvas:
     def __init__(self, canvas, doc):
         self.canvas = canvas
@@ -149,6 +231,7 @@ class NumberedCanvas:
     def on_page(self, canvas, doc):
         canvas.saveState()
         font = _get_font()
+        bold_font = _get_bold_font()
 
         page_num = canvas.getPageNumber()
         page_w, page_h = A4
@@ -157,13 +240,18 @@ class NumberedCanvas:
         canvas.setLineWidth(0.5)
         canvas.line(2 * cm, page_h - 1.8 * cm, page_w - 2 * cm, page_h - 1.8 * cm)
 
-        canvas.setFont(font, 9)
+        try:
+            canvas.setFont(font, 9)
+        except Exception:
+            canvas.setFont("Helvetica", 9)
         canvas.setFillColor(COLOR_MUTED)
         canvas.drawString(2 * cm, page_h - 1.5 * cm, "PaperWise AI 学术诚信检测报告")
 
         logo_text = "PAPERWISE"
-        bold_font = _get_bold_font()
-        canvas.setFont(bold_font, 10)
+        try:
+            canvas.setFont(bold_font, 10)
+        except Exception:
+            canvas.setFont("Helvetica-Bold", 10)
         canvas.setFillColor(COLOR_PRIMARY)
         canvas.drawRightString(page_w - 2 * cm, page_h - 1.5 * cm, logo_text)
 
@@ -171,7 +259,10 @@ class NumberedCanvas:
         canvas.setLineWidth(0.5)
         canvas.line(2 * cm, 1.8 * cm, page_w - 2 * cm, 1.8 * cm)
 
-        canvas.setFont(font, 8)
+        try:
+            canvas.setFont(font, 8)
+        except Exception:
+            canvas.setFont("Helvetica", 8)
         canvas.setFillColor(COLOR_MUTED)
         canvas.drawString(2 * cm, 1.2 * cm, f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         canvas.drawRightString(page_w - 2 * cm, 1.2 * cm, f"第 {page_num} 页")
@@ -190,6 +281,12 @@ class CoverCanvas:
         font = _get_font()
         bold_font = _get_bold_font()
 
+        def safe_setfont(f, size):
+            try:
+                canvas.setFont(f, size)
+            except Exception:
+                canvas.setFont("Helvetica-Bold", size)
+
         canvas.setFillColor(COLOR_SECONDARY)
         canvas.rect(0, page_h * 0.55, page_w, page_h * 0.45, fill=1, stroke=0)
 
@@ -199,48 +296,48 @@ class CoverCanvas:
         canvas.setFillColor(COLOR_PRIMARY)
         canvas.circle(page_w / 2, page_h * 0.75, 2.5 * cm, fill=1, stroke=0)
 
-        canvas.setFont(bold_font, 48)
+        safe_setfont(bold_font, 48)
         canvas.setFillColor(white)
         canvas.drawCentredString(page_w / 2, page_h * 0.74, "PW")
 
-        canvas.setFont(bold_font, 14)
+        safe_setfont(bold_font, 14)
         canvas.setFillColor(HexColor("#A5B4FC"))
         canvas.drawCentredString(page_w / 2, page_h * 0.62, "ACADEMIC INTEGRITY REPORT")
 
-        canvas.setFont(font, 12)
+        safe_setfont(font, 12)
         canvas.setFillColor(COLOR_MUTED)
         canvas.drawCentredString(page_w / 2, page_h * 0.58, "PaperWise AI · AIGC 检测与人性化改写系统")
 
         project_name = self.cover_data.get("project_name", "未命名项目")
-        canvas.setFont(bold_font, 28)
+        safe_setfont(bold_font, 28)
         canvas.setFillColor(COLOR_TEXT)
-        canvas.drawCentredString(page_w / 2, page_h * 0.42, _escape_xml(project_name))
+        canvas.drawCentredString(page_w / 2, page_h * 0.42, project_name)
 
         canvas.setStrokeColor(COLOR_PRIMARY)
         canvas.setLineWidth(2)
         canvas.line(page_w / 2 - 3 * cm, page_h * 0.39, page_w / 2 + 3 * cm, page_h * 0.39)
 
         detection_time = self.cover_data.get("detection_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        canvas.setFont(font, 12)
+        safe_setfont(font, 12)
         canvas.setFillColor(COLOR_MUTED)
         canvas.drawCentredString(page_w / 2, page_h * 0.34, f"检测时间: {detection_time}")
 
         ai_score = self.cover_data.get("overall_ai_score", 0)
         score_color = _risk_color(ai_score)
 
-        canvas.setFont(bold_font, 16)
+        safe_setfont(bold_font, 16)
         canvas.setFillColor(COLOR_TEXT)
         canvas.drawCentredString(page_w / 2, page_h * 0.28, "总体 AI 生成率")
 
-        canvas.setFont(bold_font, 72)
+        safe_setfont(bold_font, 72)
         canvas.setFillColor(score_color)
         canvas.drawCentredString(page_w / 2, page_h * 0.20, f"{ai_score:.1f}%")
 
         label = _risk_label(ai_score)
-        canvas.setFont(bold_font, 18)
+        safe_setfont(bold_font, 18)
         canvas.drawCentredString(page_w / 2, page_h * 0.14, label)
 
-        canvas.setFont(font, 10)
+        safe_setfont(font, 10)
         canvas.setFillColor(COLOR_MUTED)
         canvas.drawCentredString(page_w / 2, page_h * 0.08, "本报告由 PaperWise AI 自动生成，仅供参考")
 
@@ -249,32 +346,28 @@ def build_styles():
     base_font = _get_font()
     bold_font = _get_bold_font()
 
+    def safe_font(f):
+        try:
+            return f
+        except Exception:
+            return "Helvetica"
+
     styles = getSampleStyleSheet()
 
     styles.add(ParagraphStyle(
-        name="CoverTitle",
-        fontName=bold_font,
-        fontSize=28,
-        leading=34,
-        alignment=TA_CENTER,
-        textColor=COLOR_TEXT,
-    ))
-
-    styles.add(ParagraphStyle(
         name="SectionTitle",
-        fontName=bold_font,
+        fontName=safe_font(bold_font),
         fontSize=18,
         leading=24,
         alignment=TA_LEFT,
         textColor=COLOR_SECONDARY,
         spaceBefore=18,
         spaceAfter=12,
-        borderPadding=(0, 0, 6, 0),
     ))
 
     styles.add(ParagraphStyle(
         name="SubSectionTitle",
-        fontName=bold_font,
+        fontName=safe_font(bold_font),
         fontSize=13,
         leading=18,
         alignment=TA_LEFT,
@@ -285,7 +378,7 @@ def build_styles():
 
     styles.add(ParagraphStyle(
         name="BodyTextCN",
-        fontName=base_font,
+        fontName=safe_font(base_font),
         fontSize=10,
         leading=17,
         alignment=TA_JUSTIFY,
@@ -294,38 +387,14 @@ def build_styles():
 
     styles.add(ParagraphStyle(
         name="BodyTextSmall",
-        fontName=base_font,
+        fontName=safe_font(base_font),
         fontSize=9,
         leading=15,
         alignment=TA_LEFT,
         textColor=COLOR_MUTED,
     ))
 
-    styles.add(ParagraphStyle(
-        name="RiskBadge",
-        fontName=bold_font,
-        fontSize=9,
-        leading=12,
-        alignment=TA_CENTER,
-    ))
-
-    styles.add(ParagraphStyle(
-        name="CompareHeader",
-        fontName=bold_font,
-        fontSize=11,
-        leading=15,
-        alignment=TA_CENTER,
-        textColor=COLOR_PRIMARY,
-    ))
-
     return styles
-
-
-def _make_cover_page(cover_data, styles):
-    flowables = []
-    flowables.append(NextPageTemplate("Normal"))
-    flowables.append(PageBreak())
-    return flowables
 
 
 def _make_overview_section(report_data, styles):
@@ -350,9 +419,10 @@ def _make_overview_section(report_data, styles):
             risk_counts["low"] += 1
 
     font = _get_font()
+    bold_font = _get_bold_font()
     header_style = ParagraphStyle("header_cell", fontName=font, fontSize=9, leading=13, textColor=COLOR_MUTED, alignment=TA_LEFT)
     value_style = ParagraphStyle("value_cell", fontName=font, fontSize=14, leading=20, textColor=COLOR_TEXT, alignment=TA_LEFT)
-    value_style_bold = ParagraphStyle("value_cell_bold", fontName=_get_bold_font(), fontSize=16, leading=20, textColor=_risk_color(overall_score), alignment=TA_LEFT)
+    value_style_bold = ParagraphStyle("value_cell_bold", fontName=bold_font, fontSize=16, leading=20, textColor=_risk_color(overall_score), alignment=TA_LEFT)
 
     overview_data = [
         [
@@ -384,7 +454,7 @@ def _make_overview_section(report_data, styles):
         ],
     ]
 
-    t = Table(overview_data, colWidths=[4.2 * cm] * 4)
+    t = Table(overview_data, colWidths=[4.2 * cm] * 4, repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), COLOR_PRIMARY_LIGHT),
         ("BACKGROUND", (0, 2), (-1, 2), COLOR_BG_ALT),
@@ -416,51 +486,88 @@ def _make_details_section(report_data, styles):
     base_font = _get_font()
     bold_font = _get_bold_font()
 
-    idx_style = ParagraphStyle("idx", fontName=bold_font, fontSize=9, leading=13, textColor=COLOR_PRIMARY, alignment=TA_CENTER)
-    text_style = ParagraphStyle("text_cell", fontName=base_font, fontSize=9, leading=14, textColor=COLOR_TEXT, alignment=TA_LEFT)
-    text_style_danger = ParagraphStyle("text_cell_danger", fontName=bold_font, fontSize=9, leading=14, textColor=COLOR_DANGER, alignment=TA_LEFT)
-    score_style = ParagraphStyle("score_cell", fontName=bold_font, fontSize=10, leading=14, alignment=TA_CENTER)
-    badge_style = ParagraphStyle("badge", fontName=bold_font, fontSize=8, leading=11, alignment=TA_CENTER)
+    idx_style = ParagraphStyle(
+        "det_idx", fontName=bold_font, fontSize=9, leading=13,
+        textColor=COLOR_PRIMARY, alignment=TA_CENTER
+    )
+    text_style = ParagraphStyle(
+        "det_txt", fontName=base_font, fontSize=9, leading=15,
+        textColor=COLOR_TEXT, alignment=TA_LEFT
+    )
+    text_style_danger = ParagraphStyle(
+        "det_txt_danger", fontName=bold_font, fontSize=9, leading=15,
+        textColor=COLOR_DANGER, alignment=TA_LEFT
+    )
+    score_style = ParagraphStyle(
+        "det_score", fontName=bold_font, fontSize=10, leading=14,
+        alignment=TA_CENTER
+    )
+    badge_style = ParagraphStyle(
+        "det_badge", fontName=bold_font, fontSize=8, leading=11,
+        alignment=TA_CENTER
+    )
 
     for i, d in enumerate(details):
-        text = _escape_xml(d.get("text", ""))
+        raw_text = d.get("text", "") or ""
         score_pct = d.get("ai_score", 0)
         if isinstance(score_pct, float) and score_pct <= 1:
             score_pct = score_pct * 100
 
         is_high_risk = score_pct >= 60
-        row_bg = COLOR_DANGER_LIGHT if is_high_risk else (COLOR_BG_ALT if i % 2 == 0 else white)
         score_color = _risk_color(score_pct)
         badge_bg = _risk_bg_color(score_pct)
 
-        display_text = text if len(text) <= 300 else text[:300] + "..."
+        text_chunks = _split_text_chunks(raw_text, MAX_CHUNK_CHARS)
+        if not text_chunks:
+            text_chunks = [""]
+
         text_s = text_style_danger if is_high_risk else text_style
 
-        row_data = [
-            [
-                Paragraph(f"#{i + 1}", idx_style),
-                Paragraph(display_text, text_s),
-                Paragraph(f"<font color='{score_color.hexval()}'>{score_pct:.1f}%</font>", score_style),
-                Paragraph(
-                    f"<font color='{score_color.hexval()}'>{_risk_label(score_pct)}</font>",
-                    badge_style
-                ),
-            ]
-        ]
+        table_rows = []
+        for chunk_idx, chunk in enumerate(text_chunks):
+            chunk_xml = _escape_xml(chunk)
+            if chunk_idx == 0:
+                row = [
+                    Paragraph(f"#{i + 1}", idx_style),
+                    Paragraph(chunk_xml, text_s),
+                    Paragraph(f"<font color='{score_color.hexval()}'>{score_pct:.1f}%</font>", score_style),
+                    Paragraph(
+                        f"<font color='{score_color.hexval()}'>{_risk_label(score_pct)}</font>",
+                        badge_style
+                    ),
+                ]
+            else:
+                row = [
+                    Paragraph("", idx_style),
+                    Paragraph(chunk_xml, text_s),
+                    Paragraph("", score_style),
+                    Paragraph("", badge_style),
+                ]
+            table_rows.append(row)
 
-        t = Table(row_data, colWidths=[1 * cm, 10.6 * cm, 2 * cm, 1.8 * cm])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), row_bg),
+        row_bg_main = COLOR_DANGER_LIGHT if is_high_risk else (COLOR_BG_ALT if i % 2 == 0 else white)
+        row_bg_cont = COLOR_DANGER_LIGHT if is_high_risk else (white if i % 2 == 0 else COLOR_BG_ALT)
+
+        t = Table(table_rows, colWidths=[1 * cm, 10.6 * cm, 2 * cm, 1.8 * cm])
+
+        style_cmds = [
             ("GRID", (0, 0), (-1, -1), 0.4, COLOR_BORDER),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 8),
             ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
             ("BACKGROUND", (2, 0), (3, 0), badge_bg),
-        ]))
+        ]
+        for r_idx in range(len(table_rows)):
+            bg = row_bg_main if r_idx == 0 else row_bg_cont
+            style_cmds.append(("BACKGROUND", (0, r_idx), (1, r_idx), bg))
+            if r_idx > 0:
+                style_cmds.append(("BACKGROUND", (2, r_idx), (3, r_idx), bg))
+
+        t.setStyle(TableStyle(style_cmds))
         flowables.append(t)
-        flowables.append(Spacer(1, 4))
+        flowables.append(Spacer(1, 3))
 
     return flowables
 
@@ -470,8 +577,8 @@ def _make_comparison_section(report_data, styles):
 
     flowables.append(Paragraph("三、改写前后对比", styles["SectionTitle"]))
 
-    original_text = report_data.get("original_text", "")
-    rewritten_text = report_data.get("rewritten_text", "")
+    original_text = report_data.get("original_text", "") or ""
+    rewritten_text = report_data.get("rewritten_text", "") or ""
 
     if not original_text or not rewritten_text:
         flowables.append(Paragraph("本次检测未进行改写操作，无对比内容。", styles["BodyTextCN"]))
@@ -480,8 +587,29 @@ def _make_comparison_section(report_data, styles):
     base_font = _get_font()
     bold_font = _get_bold_font()
 
-    header_style = ParagraphStyle("cmp_hdr", fontName=bold_font, fontSize=11, leading=15, alignment=TA_CENTER)
-    content_style = ParagraphStyle("cmp_txt", fontName=base_font, fontSize=9, leading=15, alignment=TA_JUSTIFY, textColor=COLOR_TEXT)
+    header_style = ParagraphStyle(
+        "cmp_hdr", fontName=bold_font, fontSize=11, leading=15, alignment=TA_CENTER
+    )
+    content_style = ParagraphStyle(
+        "cmp_txt", fontName=base_font, fontSize=9, leading=15,
+        alignment=TA_JUSTIFY, textColor=COLOR_TEXT
+    )
+    content_style_orig = ParagraphStyle(
+        "cmp_txt_orig", fontName=base_font, fontSize=9, leading=15,
+        alignment=TA_JUSTIFY, textColor=COLOR_MUTED
+    )
+    content_style_new = ParagraphStyle(
+        "cmp_txt_new", fontName=base_font, fontSize=9, leading=15,
+        alignment=TA_JUSTIFY, textColor=COLOR_SECONDARY
+    )
+    para_label_style_orig = ParagraphStyle(
+        "cmp_lbl_o", fontName=bold_font, fontSize=8, leading=12,
+        alignment=TA_LEFT, textColor=COLOR_MUTED
+    )
+    para_label_style_new = ParagraphStyle(
+        "cmp_lbl_n", fontName=bold_font, fontSize=8, leading=12,
+        alignment=TA_LEFT, textColor=COLOR_PRIMARY
+    )
 
     header_data = [[
         Paragraph("改写前（原文）", ParagraphStyle("hdr_left", parent=header_style, textColor=COLOR_MUTED)),
@@ -497,33 +625,66 @@ def _make_comparison_section(report_data, styles):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
     ]))
     flowables.append(header_t)
+    flowables.append(Spacer(1, 4))
 
     paragraphs_orig = [p.strip() for p in original_text.split("\n\n") if p.strip()]
     paragraphs_new = [p.strip() for p in rewritten_text.split("\n\n") if p.strip()]
+    if not paragraphs_orig and original_text.strip():
+        paragraphs_orig = [original_text.strip()]
+    if not paragraphs_new and rewritten_text.strip():
+        paragraphs_new = [rewritten_text.strip()]
     max_paras = max(len(paragraphs_orig), len(paragraphs_new))
 
     for i in range(max_paras):
         orig_p = paragraphs_orig[i] if i < len(paragraphs_orig) else ""
         new_p = paragraphs_new[i] if i < len(paragraphs_new) else ""
 
-        row_bg = COLOR_BG_ALT if i % 2 == 0 else white
+        orig_chunks = _split_text_chunks(orig_p, 160) if orig_p else [""]
+        new_chunks = _split_text_chunks(new_p, 160) if new_p else [""]
+        max_chunks = max(len(orig_chunks), len(new_chunks))
 
-        row_data = [[
-            Paragraph(f"<font color='#94A3B8' size='8'>段落 {i + 1}</font><br/>{_escape_xml(orig_p)}", content_style),
-            Paragraph(f"<font color='#4F46E5' size='8'>段落 {i + 1}</font><br/>{_escape_xml(new_p)}", content_style),
-        ]]
-        t = Table(row_data, colWidths=[7.7 * cm, 7.7 * cm])
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), row_bg),
+        table_rows = []
+        for c in range(max_chunks):
+            oc = orig_chunks[c] if c < len(orig_chunks) else ""
+            nc = new_chunks[c] if c < len(new_chunks) else ""
+
+            if c == 0:
+                left_content = (
+                    f"<font color='#94A3B8'><b>段落 {i + 1}</b></font><br/>"
+                    f"{_escape_xml(oc)}"
+                )
+                right_content = (
+                    f"<font color='#4F46E5'><b>段落 {i + 1}</b></font><br/>"
+                    f"{_escape_xml(nc)}"
+                )
+            else:
+                left_content = _escape_xml(oc)
+                right_content = _escape_xml(nc)
+
+            table_rows.append([
+                Paragraph(left_content, content_style_orig if c == 0 else content_style),
+                Paragraph(right_content, content_style_new if c == 0 else content_style),
+            ])
+
+        row_bg_0 = COLOR_BG_ALT if i % 2 == 0 else white
+        row_bg_c = white if i % 2 == 0 else COLOR_BG_ALT
+
+        t = Table(table_rows, colWidths=[7.7 * cm, 7.7 * cm])
+        style_cmds = [
             ("GRID", (0, 0), (-1, -1), 0.4, COLOR_BORDER),
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LEFTPADDING", (0, 0), (-1, -1), 10),
             ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-            ("TOPPADDING", (0, 0), (-1, -1), 10),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ("BACKGROUND", (0, 0), (0, -1), HexColor("#FEFEFE")),
             ("LINEAFTER", (0, 0), (0, -1), 1, COLOR_PRIMARY_LIGHT),
-        ]))
+        ]
+        for r in range(len(table_rows)):
+            bg = row_bg_0 if r == 0 else row_bg_c
+            style_cmds.append(("BACKGROUND", (1, r), (1, r), bg))
+
+        t.setStyle(TableStyle(style_cmds))
         flowables.append(t)
         flowables.append(Spacer(1, 3))
 
@@ -538,8 +699,10 @@ def _make_summary_section(report_data, styles):
     base_font = _get_font()
     bold_font = _get_bold_font()
 
-    label_style = ParagraphStyle("lbl", fontName=base_font, fontSize=10, leading=16, textColor=COLOR_MUTED)
-    val_style = ParagraphStyle("val", fontName=bold_font, fontSize=10, leading=16, textColor=COLOR_TEXT)
+    label_style = ParagraphStyle(
+        "sum_lbl", fontName=base_font, fontSize=10, leading=16,
+        textColor=COLOR_MUTED
+    )
 
     rewrite_level_map = {"low": "轻微改写", "medium": "中度改写", "high": "深度改写"}
 
@@ -559,7 +722,11 @@ def _make_summary_section(report_data, styles):
             idx = i + j
             if idx < len(params):
                 label, value = params[idx]
-                row.append(Paragraph(f"<b>{label}</b><br/><font color='#1E293B'>{_escape_xml(value)}</font>", label_style))
+                row.append(Paragraph(
+                    f"<font><b>{label}</b></font><br/>"
+                    f"<font color='#1E293B'>{_escape_xml(value)}</font>",
+                    label_style
+                ))
             else:
                 row.append("")
         table_data.append(row)
@@ -580,8 +747,17 @@ def _make_summary_section(report_data, styles):
 
     flowables.append(Spacer(1, 20))
 
-    disclaimer_style = ParagraphStyle("disc", fontName=base_font, fontSize=9, leading=15, alignment=TA_CENTER, textColor=COLOR_MUTED)
-    flowables.append(Paragraph("——— 报告结束 ———", ParagraphStyle("end", fontName=bold_font, fontSize=11, leading=16, alignment=TA_CENTER, textColor=COLOR_PRIMARY)))
+    disclaimer_style = ParagraphStyle(
+        "disc", fontName=base_font, fontSize=9, leading=15,
+        alignment=TA_CENTER, textColor=COLOR_MUTED
+    )
+    flowables.append(Paragraph(
+        "——— 报告结束 ———",
+        ParagraphStyle(
+            "end", fontName=bold_font, fontSize=11, leading=16,
+            alignment=TA_CENTER, textColor=COLOR_PRIMARY
+        )
+    ))
     flowables.append(Spacer(1, 10))
     flowables.append(Paragraph(
         "免责声明：本报告由 PaperWise AI 基于统计模型自动生成，检测结果仅供学术诚信参考，不作为任何法律或学术处分的唯一依据。",
@@ -592,25 +768,6 @@ def _make_summary_section(report_data, styles):
 
 
 def generate_pdf_report(report_data: dict) -> bytes:
-    """
-    生成完整的 PDF 检测报告。
-
-    report_data 结构:
-    {
-        "project_name": str,
-        "detection_time": str,
-        "overall_ai_score": float (百分比, e.g. 45.2),
-        "details": [{"text": str, "ai_score": float (0~1 或 百分比), ...}],
-        "original_text": str,
-        "rewritten_text": str,
-        "detection_model": str,
-        "rewrite_model": str,
-        "rewrite_level": "low" | "medium" | "high",
-        "iterations": int,
-        "bootstrap_samples": int,
-        "degraded": bool,
-    }
-    """
     _register_cjk_fonts()
     styles = build_styles()
 
@@ -622,18 +779,17 @@ def generate_pdf_report(report_data: dict) -> bytes:
     top_margin = 2.3 * cm
     bottom_margin = 2.3 * cm
 
-    cover_frame = Frame(
-        left_margin, bottom_margin,
-        page_w - left_margin - right_margin,
-        page_h - top_margin - bottom_margin,
-        id="cover"
-    )
-
     normal_frame = Frame(
         left_margin, bottom_margin,
         page_w - left_margin - right_margin,
         page_h - top_margin - bottom_margin,
         id="normal"
+    )
+    cover_frame = Frame(
+        left_margin, bottom_margin,
+        page_w - left_margin - right_margin,
+        page_h - top_margin - bottom_margin,
+        id="cover"
     )
 
     def _cover_on_page(canvas, doc):
@@ -654,6 +810,7 @@ def generate_pdf_report(report_data: dict) -> bytes:
         title="PaperWise AI 检测报告",
         author="PaperWise AI",
         subject="AIGC 学术诚信检测报告",
+        allowSplitting=1,
     )
 
     doc.addPageTemplates([
@@ -671,7 +828,37 @@ def generate_pdf_report(report_data: dict) -> bytes:
     flowables.extend(_make_comparison_section(report_data, styles))
     flowables.extend(_make_summary_section(report_data, styles))
 
-    doc.build(flowables)
+    try:
+        doc.build(flowables)
+    except Exception as build_err:
+        print(f"[PDF] 首次构建失败，尝试使用降级模式（简化排版）: {build_err}")
+        fallback_flowables = []
+        fallback_flowables.append(NextPageTemplate("Normal"))
+        fallback_flowables.append(PageBreak())
+        fallback_flowables.append(Paragraph("PaperWise AI 检测报告", styles["SectionTitle"]))
+        fallback_flowables.append(Paragraph(
+            f"总体 AI 率: {report_data.get('overall_ai_score', 0):.1f}%",
+            styles["BodyTextCN"]
+        ))
+        fallback_flowables.append(Paragraph(
+            f"检测时间: {report_data.get('detection_time', '-')}",
+            styles["BodyTextCN"]
+        ))
+        fallback_flowables.append(Spacer(1, 6))
+        fallback_flowables.append(Paragraph("检测详情", styles["SubSectionTitle"]))
+        for idx, d in enumerate(report_data.get("details", [])):
+            fallback_flowables.append(Paragraph(
+                f"段落 {idx + 1}: {_escape_xml(_truncate(d.get('text', ''), 500))}",
+                styles["BodyTextSmall"]
+            ))
+            fallback_flowables.append(Spacer(1, 2))
+        if report_data.get("rewritten_text"):
+            fallback_flowables.append(Paragraph("改写结果", styles["SubSectionTitle"]))
+            fallback_flowables.append(Paragraph(
+                _escape_xml(report_data["rewritten_text"][:5000]),
+                styles["BodyTextSmall"]
+            ))
+        doc.build(fallback_flowables)
 
     pdf_bytes = buffer.getvalue()
     buffer.close()
