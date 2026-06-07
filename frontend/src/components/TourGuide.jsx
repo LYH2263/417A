@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronRight, ChevronLeft, X, HelpCircle, Sparkles } from 'lucide-react';
+import { ChevronRight, ChevronLeft, X, HelpCircle, Sparkles, Eye } from 'lucide-react';
 
 const TOUR_STEPS = [
   {
@@ -30,6 +30,7 @@ const TOUR_STEPS = [
     title: '📊 结果查看区',
     description: '检测与改写完成后，这里会显示完整分析报告：总体 AI 率、逐段检测详情、改写历史版本对比、章节风险分布等信息。',
     placement: 'top',
+    unavailableHint: '完成检测或改写后将显示在此区域',
   },
   {
     id: 'export',
@@ -37,6 +38,7 @@ const TOUR_STEPS = [
     title: '💾 导出功能',
     description: '改写完成后，点击「导出结果」按钮即可将当前版本的文本下载为 TXT 文件。也可在历史版本对比中切换不同版本后导出。',
     placement: 'bottom',
+    unavailableHint: '改写完成后会出现导出按钮',
   },
 ];
 
@@ -44,6 +46,7 @@ function TourGuide({ isOpen, onClose, onComplete }) {
   const [currentStep, setCurrentStep] = useState(0);
   const [highlight, setHighlight] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ top: 0, left: 0, width: 0 });
+  const [targetExists, setTargetExists] = useState(true);
   const scrollRef = useRef(null);
 
   const step = TOUR_STEPS[currentStep];
@@ -53,12 +56,31 @@ function TourGuide({ isOpen, onClose, onComplete }) {
 
     const updatePosition = () => {
       const el = document.getElementById(step.targetId);
+      const tooltipWidth = 380;
+
       if (!el) {
-        setHighlight(null);
-        setTooltipPos({ top: 200, left: window.innerWidth / 2 - 200, width: 400 });
+        setTargetExists(false);
+        const placeholderW = 520;
+        const placeholderH = 96;
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        setHighlight({
+          top: centerY - placeholderH / 2 - 60 + window.scrollY,
+          left: centerX - placeholderW / 2,
+          width: placeholderW,
+          height: placeholderH,
+          radius: 16,
+          placeholder: true,
+        });
+        setTooltipPos({
+          top: centerY + placeholderH / 2 - 20 + window.scrollY,
+          left: Math.max(16, Math.min(window.innerWidth - tooltipWidth - 16, centerX - tooltipWidth / 2)),
+          width: tooltipWidth,
+        });
         return;
       }
 
+      setTargetExists(true);
       const rect = el.getBoundingClientRect();
       const pad = 6;
 
@@ -68,9 +90,9 @@ function TourGuide({ isOpen, onClose, onComplete }) {
         width: rect.width + pad * 2,
         height: rect.height + pad * 2,
         radius: 16,
+        placeholder: false,
       });
 
-      const tooltipWidth = 380;
       let top, left;
 
       if (step.placement === 'bottom') {
@@ -185,10 +207,24 @@ function TourGuide({ isOpen, onClose, onComplete }) {
             width: highlight.width,
             height: highlight.height,
             borderRadius: highlight.radius,
-            boxShadow:
-              '0 0 0 4px rgba(99, 102, 241, 0.6), 0 0 40px rgba(99, 102, 241, 0.4), 0 0 80px rgba(99, 102, 241, 0.15)',
+            boxShadow: highlight.placeholder
+              ? '0 0 0 2px rgba(148, 163, 184, 0.5), 0 0 30px rgba(148, 163, 184, 0.15), inset 0 0 30px rgba(148, 163, 184, 0.08)'
+              : '0 0 0 4px rgba(99, 102, 241, 0.6), 0 0 40px rgba(99, 102, 241, 0.4), 0 0 80px rgba(99, 102, 241, 0.15)',
+            background: highlight.placeholder
+              ? 'repeating-linear-gradient(45deg, rgba(148,163,184,0.04) 0 10px, transparent 10px 20px), rgba(30,41,59,0.5)'
+              : 'transparent',
+            border: highlight.placeholder ? '2px dashed rgba(148, 163, 184, 0.4)' : 'none',
           }}
-        />
+        >
+          {highlight.placeholder && (
+            <div className="absolute inset-0 flex items-center justify-center gap-2 text-slate-400">
+              <Eye className="w-4 h-4 opacity-60" />
+              <span className="text-xs font-medium tracking-wide opacity-70">
+                {step.unavailableHint || '此区域将在后续操作中显示'}
+              </span>
+            </div>
+          )}
+        </motion.div>
       )}
 
       <AnimatePresence mode="wait">
@@ -205,17 +241,30 @@ function TourGuide({ isOpen, onClose, onComplete }) {
             width: tooltipPos.width,
           }}
         >
-          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl shadow-2xl shadow-indigo-500/10 overflow-hidden">
-            <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 px-5 py-3 flex items-center justify-between">
+          <div className={`bg-slate-900 rounded-2xl shadow-2xl overflow-hidden border ${
+            targetExists
+              ? 'border-indigo-500/40 shadow-indigo-500/10'
+              : 'border-slate-600/50 shadow-slate-500/5'
+          }`}>
+            <div className={`px-5 py-3 flex items-center justify-between ${
+              targetExists
+                ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600'
+                : 'bg-slate-700/70'
+            }`}>
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-white" />
-                <span className="text-white text-xs font-bold tracking-wider uppercase">
+                <Sparkles className={`w-4 h-4 ${targetExists ? 'text-white' : 'text-slate-300'}`} />
+                <span className={`text-xs font-bold tracking-wider uppercase ${targetExists ? 'text-white' : 'text-slate-300'}`}>
                   新手引导 · Step {currentStep + 1} / {TOUR_STEPS.length}
                 </span>
+                {!targetExists && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-slate-900/60 text-slate-300 border border-slate-500/40">
+                    预览
+                  </span>
+                )}
               </div>
               <button
                 onClick={handleSkip}
-                className="text-white/80 hover:text-white transition-colors"
+                className={`transition-colors ${targetExists ? 'text-white/80 hover:text-white' : 'text-slate-300/80 hover:text-white'}`}
               >
                 <X className="w-4 h-4" />
               </button>
@@ -223,12 +272,20 @@ function TourGuide({ isOpen, onClose, onComplete }) {
 
             <div className="p-5">
               <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-                <HelpCircle className="w-5 h-5 text-indigo-400" />
+                <HelpCircle className={`w-5 h-5 ${targetExists ? 'text-indigo-400' : 'text-slate-500'}`} />
                 {step.title}
               </h3>
-              <p className="text-sm text-slate-300 leading-relaxed">
+              <p className={`text-sm leading-relaxed ${targetExists ? 'text-slate-300' : 'text-slate-400'}`}>
                 {step.description}
               </p>
+              {!targetExists && step.unavailableHint && (
+                <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700/60">
+                  <Eye className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                  <span className="text-[11px] text-slate-400">
+                    💡 {step.unavailableHint}
+                  </span>
+                </div>
+              )}
 
               <div className="flex items-center justify-between mt-5">
                 <div className="flex items-center gap-1.5">

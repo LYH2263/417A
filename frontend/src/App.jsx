@@ -621,20 +621,18 @@ function App() {
 
   useEffect(() => {
     const tourSeen = localStorage.getItem('paperwise_tour_seen');
+    const lastSeenVersion = localStorage.getItem('paperwise_last_changelog_version');
+    const currentVersion = changelogData[0]?.version;
+    const shouldShowChangelog = currentVersion && lastSeenVersion !== currentVersion;
+
     if (!tourSeen) {
       const t = setTimeout(() => setTourOpen(true), 600);
       return () => clearTimeout(t);
-    }
-  }, []);
-
-  useEffect(() => {
-    const lastSeenVersion = localStorage.getItem('paperwise_last_changelog_version');
-    const currentVersion = changelogData[0]?.version;
-    if (currentVersion && lastSeenVersion !== currentVersion) {
+    } else if (shouldShowChangelog) {
       const t = setTimeout(() => {
         setChangelogOpen(true);
         localStorage.setItem('paperwise_last_changelog_version', currentVersion);
-      }, 1200);
+      }, 600);
       return () => clearTimeout(t);
     }
   }, []);
@@ -642,11 +640,27 @@ function App() {
   const handleTourComplete = () => {
     localStorage.setItem('paperwise_tour_seen', 'true');
     setTourOpen(false);
+    const lastSeenVersion = localStorage.getItem('paperwise_last_changelog_version');
+    const currentVersion = changelogData[0]?.version;
+    if (currentVersion && lastSeenVersion !== currentVersion) {
+      setTimeout(() => {
+        setChangelogOpen(true);
+        localStorage.setItem('paperwise_last_changelog_version', currentVersion);
+      }, 400);
+    }
   };
 
   const handleTourClose = () => {
     localStorage.setItem('paperwise_tour_seen', 'true');
     setTourOpen(false);
+    const lastSeenVersion = localStorage.getItem('paperwise_last_changelog_version');
+    const currentVersion = changelogData[0]?.version;
+    if (currentVersion && lastSeenVersion !== currentVersion) {
+      setTimeout(() => {
+        setChangelogOpen(true);
+        localStorage.setItem('paperwise_last_changelog_version', currentVersion);
+      }, 400);
+    }
   };
 
   // 流式改写相关状态
