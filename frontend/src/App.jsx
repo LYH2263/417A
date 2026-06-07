@@ -761,8 +761,10 @@ function App() {
       setText(new_full_text);
 
       if (structureResult) {
+        let foundTarget = false;
         const updatedSections = structureResult.sections.map(s => {
           if (s.id === section.id) {
+            foundTarget = true;
             return {
               ...s,
               ...updated_section,
@@ -772,7 +774,14 @@ function App() {
               details: section_detection_after?.details ?? s.details
             };
           }
-          if (index_offset !== 0 && s.start_index > section.end_index) {
+          if (index_offset !== 0 && foundTarget) {
+            return {
+              ...s,
+              start_index: s.start_index + index_offset,
+              end_index: s.end_index + index_offset
+            };
+          }
+          if (index_offset !== 0 && !foundTarget && s.start_index > section.end_index) {
             return {
               ...s,
               start_index: s.start_index + index_offset,

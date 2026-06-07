@@ -175,40 +175,65 @@ def fallback_chunk_by_size(text: str, chunk_size: int = 2000) -> List[PaperSecti
     if not text or not text.strip():
         return []
 
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    paragraphs_with_pos = []
+    pattern = re.compile(r"(\S[^\n]*(?:\n\S[^\n]*)*)", re.MULTILINE)
+    for m in pattern.finditer(text):
+        para_text = m.group(0)
+        if para_text.strip():
+            paragraphs_with_pos.append((m.start(), m.end(), para_text))
+
+    if not paragraphs_with_pos:
+        return [PaperSection(
+            id="sec_1",
+            title="Content Block 1",
+            level=1,
+            start_index=0,
+            end_index=len(text),
+            content=text,
+            standard_type=None
+        )]
+
     sections: List[PaperSection] = []
-    current_chunk = []
+    current_chunk_paras = []
+    current_chunk_start = None
+    current_chunk_end = 0
     current_len = 0
     chunk_counter = 0
 
-    for para in paragraphs:
+    for start, end, para in paragraphs_with_pos:
         para_len = len(para)
-        if current_len + para_len > chunk_size and current_chunk:
+        if current_len + para_len > chunk_size and current_chunk_paras:
             chunk_counter += 1
+            first_start = current_chunk_paras[0][0]
+            last_end = current_chunk_paras[-1][1]
+            content = text[first_start:last_end]
             sections.append(PaperSection(
                 id=f"sec_{chunk_counter}",
                 title=f"Content Block {chunk_counter}",
                 level=1,
-                start_index=0,
-                end_index=0,
-                content="\n\n".join(current_chunk),
+                start_index=first_start,
+                end_index=last_end,
+                content=content,
                 standard_type=None
             ))
-            current_chunk = [para]
+            current_chunk_paras = [(start, end, para)]
             current_len = para_len
         else:
-            current_chunk.append(para)
+            current_chunk_paras.append((start, end, para))
             current_len += para_len
 
-    if current_chunk:
+    if current_chunk_paras:
         chunk_counter += 1
+        first_start = current_chunk_paras[0][0]
+        last_end = current_chunk_paras[-1][1]
+        content = text[first_start:last_end]
         sections.append(PaperSection(
             id=f"sec_{chunk_counter}",
             title=f"Content Block {chunk_counter}",
             level=1,
-            start_index=0,
-            end_index=0,
-            content="\n\n".join(current_chunk),
+            start_index=first_start,
+            end_index=last_end,
+            content=content,
             standard_type=None
         ))
 
