@@ -90,6 +90,7 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
   const [showImport, setShowImport] = useState(false);
   const [importPreview, setImportPreview] = useState([]);
   const [importText, setImportText] = useState('');
+  const [importResult, setImportResult] = useState(null);
   const fileInputRef = useRef(null);
 
   const showToast = (type, message) => {
@@ -187,8 +188,15 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
       setImportPreview([]);
       return;
     }
+    let startIdx = 0;
+    if (lines.length > 0) {
+      const firstLine = lines[0].toLowerCase();
+      if (firstLine.startsWith('term') || firstLine.startsWith('术语') || firstLine.includes('category') || firstLine.includes('类别')) {
+        startIdx = 1;
+      }
+    }
     const preview = [];
-    for (let i = 0; i < lines.length && i < 50; i++) {
+    for (let i = startIdx; i < lines.length && preview.length < 50; i++) {
       const line = lines[i];
       const parts = line.split(',').map(s => s.trim().replace(/^"|"$/g, ''));
       if (parts.length > 0 && parts[0]) {
@@ -209,13 +217,21 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
     }
     try {
       const res = await axios.post(`${API_BASE}/terminology/bulk-import`, { items: importPreview });
-      showToast('success', `导入成功：新增${res.data.created}个，更新${res.data.updated}个`);
-      setShowImport(false);
-      setImportPreview([]);
-      setImportText('');
+      setImportResult({
+        created: res.data.created || 0,
+        updated: res.data.updated || 0,
+        skipped: res.data.skipped || 0,
+        errors: res.data.errors || [],
+        total: importPreview.length
+      });
+      showToast('success', `导入完成：新增${res.data.created || 0}个，更新${res.data.updated || 0}个`);
       loadData();
       onTermsChange && onTermsChange();
     } catch (err) {
+      setImportResult({
+        error: err.response?.data?.detail || err.message || '导入失败',
+        total: importPreview.length
+      });
       showToast('error', '导入失败');
     }
   };
@@ -376,14 +392,14 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 z-20"
+                className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-20 overflow-y-auto"
                 onClick={() => { setShowForm(false); setEditingTerm(null); }}
               >
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="w-full max-w-md bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl p-6"
+                  className="w-full max-w-md bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl p-6 my-auto"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between mb-5">
@@ -463,20 +479,20 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-6 z-20"
-                onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); }}
+                className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm flex items-start sm:items-center justify-center p-4 sm:p-6 z-20 overflow-y-auto"
+                onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); setImportResult(null); }}
               >
                 <motion.div
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="w-full max-w-2xl bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl p-6"
+                  className="w-full max-w-2xl bg-slate-900 rounded-2xl border border-slate-700 shadow-2xl p-6 my-auto"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between mb-5">
                     <h3 className="text-lg font-bold text-white">批量导入术语</h3>
                     <button
-                      onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); }}
+                      onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); setImportResult(null); }}
                       className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-white transition-all"
                     >
                       <X className="w-4 h-4" />
@@ -484,81 +500,173 @@ export default function TerminologyDictionary({ isOpen, onClose, onTermsChange }
                   </div>
 
                   <div className="space-y-4">
-                    <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
-                      <div className="flex items-start gap-2">
-                        <Info className="w-4 h-4 text-indigo-400 flex-shrink-0 mt-0.5" />
-                        <div className="text-xs text-slate-300 space-y-1">
-                          <p>支持 CSV 格式，每行格式：<code className="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">术语,类别,描述</code></p>
-                          <p>类别可选值：人名、机构名、专有名词、公式符号、化学术语、医学术语、法律术语、其他</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                      <button
-                        onClick={handleExportTemplate}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium border border-slate-700 transition-all"
+                    {importResult ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="space-y-4"
                       >
-                        <Download className="w-4 h-4" />
-                        下载模板
-                      </button>
-                      <div className="relative flex-1">
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept=".csv"
-                          onChange={handleFileSelect}
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        />
-                        <button className="w-full inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium shadow-lg shadow-indigo-500/20 transition-all">
-                          <Upload className="w-4 h-4" />
-                          选择 CSV 文件
-                        </button>
-                      </div>
-                    </div>
+                        <div className={`p-5 rounded-2xl border ${
+                          importResult.error
+                            ? 'bg-red-500/5 border-red-500/30'
+                            : 'bg-emerald-500/5 border-emerald-500/30'
+                        }`}>
+                          <div className="flex items-center gap-3 mb-4">
+                            <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${
+                              importResult.error ? 'bg-red-500/20' : 'bg-emerald-500/20'
+                            }`}>
+                              {importResult.error ? (
+                                <AlertCircle className="w-5 h-5 text-red-400" />
+                              ) : (
+                                <CheckCircle className="w-5 h-5 text-emerald-400" />
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-white">
+                                {importResult.error ? '导入失败' : '导入完成'}
+                              </h4>
+                              <p className="text-xs text-slate-400">
+                                {importResult.error ? importResult.error : `共处理 ${importResult.total} 条数据`}
+                              </p>
+                            </div>
+                          </div>
 
-                    {importPreview.length > 0 && (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                            预览（{importPreview.length} 条）
-                          </span>
-                        </div>
-                        <div className="max-h-60 overflow-y-auto border border-slate-700 rounded-xl divide-y divide-slate-800">
-                          {importPreview.map((item, idx) => (
-                            <div key={idx} className="flex items-center gap-3 p-3 bg-slate-900/60">
-                              <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium text-white truncate">{item.term}</span>
-                                  <CategoryBadge category={item.category} />
-                                </div>
-                                {item.description && (
-                                  <p className="text-xs text-slate-500 truncate">{item.description}</p>
+                          {!importResult.error && (
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/50 text-center">
+                                <p className="text-2xl font-black text-emerald-400 mb-0.5">{importResult.created}</p>
+                                <p className="text-[10px] text-slate-400 uppercase tracking-wider">新增</p>
+                              </div>
+                              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/50 text-center">
+                                <p className="text-2xl font-black text-indigo-400 mb-0.5">{importResult.updated}</p>
+                                <p className="text-[10px] text-slate-400 uppercase tracking-wider">更新</p>
+                              </div>
+                              <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-700/50 text-center">
+                                <p className="text-2xl font-black text-slate-400 mb-0.5">{importResult.skipped}</p>
+                                <p className="text-[10px] text-slate-400 uppercase tracking-wider">跳过</p>
+                              </div>
+                            </div>
+                          )}
+
+                          {importResult.errors && importResult.errors.length > 0 && (
+                            <div className="mt-4">
+                              <p className="text-[10px] font-bold text-red-400 uppercase tracking-wider mb-2">错误详情（{importResult.errors.length}）</p>
+                              <div className="max-h-24 overflow-y-auto space-y-1">
+                                {importResult.errors.slice(0, 5).map((err, i) => (
+                                  <p key={i} className="text-[11px] text-red-300/80">· {err}</p>
+                                ))}
+                                {importResult.errors.length > 5 && (
+                                  <p className="text-[11px] text-slate-500">...还有 {importResult.errors.length - 5} 条错误</p>
                                 )}
                               </div>
                             </div>
-                          ))}
+                          )}
                         </div>
-                      </div>
+                      </motion.div>
+                    ) : (
+                      <>
+                        <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
+                          <div className="flex items-start gap-2">
+                            <Info className="w-4 h-4 text-indigo-400 flex-shrink-0 mt-0.5" />
+                            <div className="text-xs text-slate-300 space-y-1">
+                              <p>支持 CSV 格式，每行格式：<code className="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300">术语,类别,描述</code></p>
+                              <p>类别可选值：人名、机构名、专有名词、公式符号、化学术语、医学术语、法律术语、其他</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-3">
+                          <button
+                            onClick={handleExportTemplate}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium border border-slate-700 transition-all"
+                          >
+                            <Download className="w-4 h-4" />
+                            下载模板
+                          </button>
+                          <div className="relative flex-1">
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              accept=".csv"
+                              onChange={handleFileSelect}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                            <button className="w-full inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-medium shadow-lg shadow-indigo-500/20 transition-all">
+                              <Upload className="w-4 h-4" />
+                              选择 CSV 文件
+                            </button>
+                          </div>
+                        </div>
+
+                        {importPreview.length > 0 && (
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                                预览（{importPreview.length} 条）
+                              </span>
+                            </div>
+                            <div className="max-h-60 overflow-y-auto border border-slate-700 rounded-xl divide-y divide-slate-800">
+                              {importPreview.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-3 p-3 bg-slate-900/60">
+                                  <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm font-medium text-white truncate">{item.term}</span>
+                                      <CategoryBadge category={item.category} />
+                                    </div>
+                                    {item.description && (
+                                      <p className="text-xs text-slate-500 truncate">{item.description}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
 
                   <div className="flex gap-3 mt-6">
-                    <button
-                      onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); }}
-                      className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium border border-slate-700 transition-all"
-                    >
-                      取消
-                    </button>
-                    <button
-                      onClick={handleImportConfirm}
-                      disabled={importPreview.length === 0}
-                      className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-500/20 disabled:shadow-none transition-all"
-                    >
-                      <Upload className="w-4 h-4" />
-                      确认导入
-                    </button>
+                    {importResult ? (
+                      <>
+                        <button
+                          onClick={() => {
+                            setImportResult(null);
+                            setImportPreview([]);
+                            setImportText('');
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                          className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium border border-slate-700 transition-all"
+                        >
+                          继续导入
+                        </button>
+                        <button
+                          onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); setImportResult(null); }}
+                          className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-500/20 transition-all"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          完成
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => { setShowImport(false); setImportPreview([]); setImportText(''); setImportResult(null); }}
+                          className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-sm font-medium border border-slate-700 transition-all"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={handleImportConfirm}
+                          disabled={importPreview.length === 0}
+                          className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-500/20 disabled:shadow-none transition-all"
+                        >
+                          <Upload className="w-4 h-4" />
+                          确认导入
+                        </button>
+                      </>
+                    )}
                   </div>
                 </motion.div>
               </motion.div>
