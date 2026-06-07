@@ -27,6 +27,141 @@ def get_detector():
 def is_model_degraded(detector):
     return detector is None
 
+import re as _re
+
+def smart_split_sentences(text: str):
+    text = text.strip()
+    if not text:
+        return []
+
+    sentences = []
+    buffer = ""
+    i = 0
+    abbreviations = {
+        "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "vs.", "etc.",
+        "e.g.", "i.e.", "cf.", "fig.", "eq.", "ref.", "st.", "ave.", "rd.",
+        "u.s.", "u.k.", "a.m.", "p.m.", "ph.d.", "b.s.", "m.s.",
+        "jan.", "feb.", "mar.", "apr.", "jun.", "jul.", "aug.", "sep.", "oct.", "nov.", "dec.",
+        "vol.", "no.", "nos.", "pp.", "p.", "ed.", "eds.", "chap.", "ch.", "sec.",
+        "sect.", "para.", "par.", "approx.", "app.", "def.", "eqn.", "resp.",
+        "misc.", "max.", "min.", "cit.", "op.", "loc."
+    }
+    quote_chars = {'"', "'", "”", "’", "」", "』", "）", ")"}
+
+    while i < len(text):
+        ch = text[i]
+        buffer += ch
+
+        if ch in ".。!！?？":
+            lookahead = text[i+1:i+6].lower() if i + 1 < len(text) else ""
+            curr_tail = buffer.strip().lower()
+
+            is_abbrev = False
+            if ch == ".":
+                last_token = curr_tail.split()[-1] if curr_tail.split() else ""
+                clean_token = last_token.strip(",;:()[]{}<>")
+                if clean_token in abbreviations:
+                    is_abbrev = True
+                bare = clean_token.replace(".", "")
+                if 1 <= len(bare) <= 3 and bare.isalpha():
+                    is_abbrev = True
+                if bare and bare.isdigit():
+                    is_abbrev = True
+
+            if not is_abbrev:
+                j = i + 1
+                while j < len(text) and text[j] in quote_chars:
+                    buffer += text[j]
+                    j += 1
+                while j < len(text) and text[j].isspace():
+                    buffer += text[j]
+                    j += 1
+
+                stripped = buffer.strip()
+                if len(stripped) > 0:
+                    sentences.append(stripped)
+                buffer = ""
+                i = j
+                continue
+
+        i += 1
+
+    if buffer.strip():
+        sentences.append(buffer.strip())
+
+    if len(sentences) <= 1 and len(text) > 200:
+        fallback = _re.split(r'(?<=[。.!?！？])\s+', text)
+        fallback = [s.strip() for s in fallback if s.strip()]
+        if len(fallback) > len(sentences):
+            return fallback
+
+    if len(sentences) <= 1 and len(text) > 300:
+        chunks = []
+        chunk_size = max(80, len(text) // max(1, len(text) // 150))
+        for k in range(0, len(text), chunk_size):
+            piece = text[k:k+chunk_size].strip()
+            if piece:
+                chunks.append(piece)
+        if len(chunks) > 1:
+            return chunks
+
+    if len(sentences) <= 1:
+        return [text]
+
+    return sentences
+
+def recompute_overall_stats(details):
+    if not details:
+        return {
+            "overall_ai_score": 0.0,
+            "overall_mean": 0.0,
+            "overall_std": 0.0,
+            "overall_ci_lower": 0.0,
+            "overall_ci_upper": 0.0,
+            "overall_credibility": "high"
+        }
+
+    total_weight = 0
+    weighted_mean = 0.0
+    all_scores = []
+    for d in details:
+        w = max(1, len(d.get("text", "")))
+        total_weight += w
+        mean_val = d.get("mean", d.get("ai_score", 0.5))
+        weighted_mean += mean_val * w
+        if "samples" in d and isinstance(d["samples"], list):
+            all_scores.extend(d["samples"])
+        else:
+            all_scores.append(mean_val)
+
+    weighted_mean = weighted_mean / total_weight if total_weight > 0 else 0.0
+    all_mean = sum(all_scores) / len(all_scores) if all_scores else 0.0
+    if len(all_scores) > 1:
+        overall_std = math.sqrt(sum((s - all_mean) ** 2 for s in all_scores) / (len(all_scores) - 1))
+    else:
+        overall_std = 0.0
+    n_total = len(all_scores)
+    z = 1.96
+    margin = z * (overall_std / math.sqrt(n_total)) if n_total > 0 else 0.0
+    overall_ci_lower = max(0.0, weighted_mean - margin)
+    overall_ci_upper = min(1.0, weighted_mean + margin)
+
+    if overall_std <= 0.05:
+        cred = "high"
+    elif overall_std <= 0.12:
+        cred = "medium"
+    else:
+        cred = "low"
+
+    return {
+        "overall_ai_score": round(weighted_mean * 100, 2),
+        "overall_mean": weighted_mean,
+        "overall_std": overall_std,
+        "overall_ci_lower": overall_ci_lower,
+        "overall_ci_upper": overall_ci_upper,
+        "overall_credibility": cred
+    }
+
 def _score_chunk(detector, chunk):
     try:
         res = detector(chunk)[0]

@@ -1126,11 +1126,6 @@ function App() {
 
   const handleSplitRedetect = async (idx, chunk) => {
     if (!chunk.text) return;
-    const sentences = chunk.text.split(/(?<=[。.!?！？.])\s+/).filter(s => s.trim().length > 5);
-    if (sentences.length < 2) {
-      alert("该段落内容较短，无法进一步拆分。请手动编辑后重试。");
-      return;
-    }
 
     if (quota <= 0) {
       alert("今日额度已用完，请明天再试或升级账户。");
@@ -1139,26 +1134,38 @@ function App() {
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_BASE}/detect-text-advanced`, {
+      const splitResp = await axios.post(`${API_BASE}/split-sentences`, { text: chunk.text });
+      const { sentences, can_split } = splitResp.data;
+      if (!can_split || sentences.length < 2) {
+        alert("该段落内容较短，无法进一步拆分。请手动编辑后重试。");
+        setLoading(false);
+        return;
+      }
+
+      const detectResp = await axios.post(`${API_BASE}/detect-text-advanced`, {
         text: sentences.join('\n\n'),
         bootstrap_samples: bootstrapSamples
       });
-      const newResult = response.data;
+      const newDetection = detectResp.data;
       const currentDetails = result.details || [];
       const newDetails = [
         ...currentDetails.slice(0, idx),
-        ...newResult.details,
+        ...newDetection.details,
         ...currentDetails.slice(idx + 1)
       ];
-      const totalWeight = newDetails.reduce((s, d) => s + Math.max(1, d.text.length), 0);
-      const weightedMean = totalWeight > 0
-        ? newDetails.reduce((s, d) => s + d.mean * Math.max(1, d.text.length), 0) / totalWeight
-        : 0;
+
+      const recomputeResp = await axios.post(`${API_BASE}/recompute-stats`, { details: newDetails });
+      const newOverallStats = recomputeResp.data;
+
       setResult({
         ...result,
         details: newDetails,
-        overall_ai_score: Math.round(weightedMean * 100 * 100) / 100,
-        overall_mean: weightedMean
+        overall_ai_score: newOverallStats.overall_ai_score,
+        overall_mean: newOverallStats.overall_mean,
+        overall_std: newOverallStats.overall_std,
+        overall_ci_lower: newOverallStats.overall_ci_lower,
+        overall_ci_upper: newOverallStats.overall_ci_upper,
+        overall_credibility: newOverallStats.overall_credibility,
       });
       decreaseQuota();
     } catch (err) {

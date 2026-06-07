@@ -13,7 +13,7 @@ from datetime import datetime
 
 try:
     from app.parser import extract_text
-    from app.detector import detect_ai_content, detect_ai_content_advanced
+    from app.detector import detect_ai_content, detect_ai_content_advanced, smart_split_sentences, recompute_overall_stats
     from app.rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
     from app.structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
     from app.pdf_report import generate_pdf_report
@@ -35,7 +35,7 @@ try:
 except ImportError:
     try:
         from .parser import extract_text
-        from .detector import detect_ai_content, detect_ai_content_advanced
+        from .detector import detect_ai_content, detect_ai_content_advanced, smart_split_sentences, recompute_overall_stats
         from .rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
         from .structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from .pdf_report import generate_pdf_report
@@ -56,7 +56,7 @@ except ImportError:
         )
     except ImportError:
         from parser import extract_text
-        from detector import detect_ai_content, detect_ai_content_advanced
+        from detector import detect_ai_content, detect_ai_content_advanced, smart_split_sentences, recompute_overall_stats
         from rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
         from structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from pdf_report import generate_pdf_report
@@ -141,6 +141,10 @@ class RewriteChapterPayload(BaseModel):
     full_text: str
     section: dict
     level: str = "medium"
+
+
+class RecomputeStatsPayload(BaseModel):
+    details: List[Dict[str, Any]]
 
 
 class PDFReportPayload(BaseModel):
@@ -678,6 +682,27 @@ async def detect_text_advanced(payload: AdvancedDetectPayload):
     except Exception:
         pass
     return result
+
+
+@app.post("/api/split-sentences")
+async def split_sentences(payload: TextPayload):
+    if not payload.text:
+        raise HTTPException(status_code=400, detail="No text provided")
+    sentences = smart_split_sentences(payload.text)
+    return {
+        "sentences": sentences,
+        "count": len(sentences),
+        "can_split": len(sentences) >= 2
+    }
+
+
+@app.post("/api/recompute-stats")
+async def recompute_stats(payload: RecomputeStatsPayload):
+    if not payload.details:
+        raise HTTPException(status_code=400, detail="No details provided")
+    stats = recompute_overall_stats(payload.details)
+    return stats
+
 
 @app.post("/api/detect-file")
 async def detect_file(file: UploadFile = File(...)):
