@@ -17,6 +17,13 @@ try:
     from app.rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
     from app.structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
     from app.pdf_report import generate_pdf_report
+    from app.database import (
+        save_record,
+        get_records,
+        get_daily_usage,
+        get_rewrite_level_distribution,
+        get_ai_score_trend,
+    )
 except ImportError:
     try:
         from .parser import extract_text
@@ -24,12 +31,26 @@ except ImportError:
         from .rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
         from .structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from .pdf_report import generate_pdf_report
+        from .database import (
+            save_record,
+            get_records,
+            get_daily_usage,
+            get_rewrite_level_distribution,
+            get_ai_score_trend,
+        )
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content, detect_ai_content_advanced
         from rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
         from structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from pdf_report import generate_pdf_report
+        from database import (
+            save_record,
+            get_records,
+            get_daily_usage,
+            get_rewrite_level_distribution,
+            get_ai_score_trend,
+        )
 
 app = FastAPI(title="Academic AIGC Helper API")
 
@@ -204,14 +225,30 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
     combined_text = "\n\n".join(rewritten_para_texts)
     
     try:
+        detection_before = detect_ai_content("\n\n".join(all_texts))
+    except Exception:
+        detection_before = None
+    
+    try:
         detection_after = detect_ai_content(combined_text)
     except Exception:
         detection_after = None
     
+    try:
+        save_record(
+            operation_type="rewrite",
+            original_ai_score=detection_before.get("overall_ai_score") if detection_before else None,
+            rewritten_ai_score=detection_after.get("overall_ai_score") if detection_after else None,
+            rewrite_level=payload.level,
+        )
+    except Exception:
+        pass
+    
     return {
         "paragraphs": results,
         "combined_text": combined_text,
-        "detection_after": detection_after
+        "detection_after": detection_after,
+        "detection_before": detection_before
     }
 
 @app.post("/api/rewrite")
@@ -222,13 +259,19 @@ async def rewrite(payload: RewritePayload):
     current_text = payload.text
     max_retries = 3
     detection_after = None
+    detection_before = None
+    
+    try:
+        detection_before = detect_ai_content(payload.text)
+    except Exception:
+        detection_before = None
     
     history = []
     history.append({
         "version": 0,
         "label": "原文",
         "text": payload.text,
-        "detection": None
+        "detection": detection_before
     })
     
     for i in range(max_retries):
@@ -244,11 +287,22 @@ async def rewrite(payload: RewritePayload):
         
         if detection_after["overall_ai_score"] < 10:
             break
-            
+    
+    try:
+        save_record(
+            operation_type="rewrite",
+            original_ai_score=detection_before.get("overall_ai_score") if detection_before else None,
+            rewritten_ai_score=detection_after.get("overall_ai_score") if detection_after else None,
+            rewrite_level=payload.level,
+        )
+    except Exception:
+        pass
+    
     return {
         "original_text": payload.text,
         "rewritten_text": current_text,
         "detection_after": detection_after,
+        "detection_before": detection_before,
         "iterations": i + 1,
         "history": history
     }
@@ -541,6 +595,13 @@ async def detect_text(payload: TextPayload):
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
     result = detect_ai_content(payload.text)
+    try:
+        save_record(
+            operation_type="detect",
+            original_ai_score=result.get("overall_ai_score"),
+        )
+    except Exception:
+        pass
     return result
 
 @app.post("/api/detect-text-advanced")
@@ -548,6 +609,13 @@ async def detect_text_advanced(payload: AdvancedDetectPayload):
     if not payload.text:
         raise HTTPException(status_code=400, detail="No text provided")
     result = detect_ai_content_advanced(payload.text, bootstrap_samples=payload.bootstrap_samples)
+    try:
+        save_record(
+            operation_type="detect",
+            original_ai_score=result.get("overall_ai_score"),
+        )
+    except Exception:
+        pass
     return result
 
 @app.post("/api/detect-file")
@@ -559,6 +627,13 @@ async def detect_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
     
     result = detect_ai_content(text)
+    try:
+        save_record(
+            operation_type="detect",
+            original_ai_score=result.get("overall_ai_score"),
+        )
+    except Exception:
+        pass
     return {
         "filename": file.filename,
         "text": text,
@@ -703,16 +778,32 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
 
             # 生成完成后做一次检测
             detection_after = None
+            detection_before = None
+            try:
+                detection_before = detect_ai_content(original_text)
+            except Exception:
+                detection_before = None
             try:
                 detection_after = detect_ai_content(accumulated)
             except Exception:
                 detection_after = None
+
+            try:
+                save_record(
+                    operation_type="rewrite",
+                    original_ai_score=detection_before.get("overall_ai_score") if detection_before else None,
+                    rewritten_ai_score=detection_after.get("overall_ai_score") if detection_after else None,
+                    rewrite_level=payload.level,
+                )
+            except Exception:
+                pass
 
             yield _sse_event("done", {
                 "stream_id": stream_id,
                 "final_text": accumulated,
                 "generated_chars": len(accumulated),
                 "detection_after": detection_after,
+                "detection_before": detection_before,
             })
 
         except Exception as e:
@@ -889,16 +980,32 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
             combined_text = "\n\n".join(rewritten_para_texts)
 
             detection_after = None
+            detection_before = None
+            try:
+                detection_before = detect_ai_content("\n\n".join(all_texts))
+            except Exception:
+                detection_before = None
             try:
                 detection_after = detect_ai_content(combined_text)
             except Exception:
                 detection_after = None
+
+            try:
+                save_record(
+                    operation_type="rewrite",
+                    original_ai_score=detection_before.get("overall_ai_score") if detection_before else None,
+                    rewritten_ai_score=detection_after.get("overall_ai_score") if detection_after else None,
+                    rewrite_level=payload.level,
+                )
+            except Exception:
+                pass
 
             yield _sse_event("done", {
                 "stream_id": stream_id,
                 "paragraphs": results,
                 "combined_text": combined_text,
                 "detection_after": detection_after,
+                "detection_before": detection_before,
             })
 
         except Exception as e:
@@ -962,6 +1069,51 @@ async def generate_report(payload: PDFReportPayload):
         print(f"[PDF] 生成报告异常: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF 生成失败: {str(e)}")
+
+
+class SaveHistoryPayload(BaseModel):
+    operation_type: str
+    original_ai_score: Optional[float] = None
+    rewritten_ai_score: Optional[float] = None
+    rewrite_level: Optional[str] = None
+
+
+@app.post("/api/history")
+async def save_history_record(payload: SaveHistoryPayload):
+    try:
+        record_id = save_record(
+            operation_type=payload.operation_type,
+            original_ai_score=payload.original_ai_score,
+            rewritten_ai_score=payload.rewritten_ai_score,
+            rewrite_level=payload.rewrite_level,
+        )
+        return {"success": True, "id": record_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/history")
+async def get_history(days: Optional[int] = None):
+    try:
+        records = get_records(days=days)
+        return {"records": records, "count": len(records)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/history/stats")
+async def get_history_stats(days: Optional[int] = None):
+    try:
+        trend = get_ai_score_trend(days=days)
+        distribution = get_rewrite_level_distribution(days=days)
+        daily = get_daily_usage(days=days)
+        return {
+            "trend": trend,
+            "distribution": distribution,
+            "daily_usage": daily,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

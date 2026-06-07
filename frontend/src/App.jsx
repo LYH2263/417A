@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff, HelpCircle, ScrollText } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff, HelpCircle, ScrollText, BarChart3 } from 'lucide-react';
+import HistoryDashboard from './components/HistoryDashboard';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
@@ -487,6 +488,7 @@ function App() {
 
   const [tourOpen, setTourOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
     const tourSeen = localStorage.getItem('paperwise_tour_seen');
@@ -1278,6 +1280,13 @@ function App() {
             <div className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
               今日额度: <span className={quota > 3 ? "text-indigo-400" : "text-red-400"}>{quota}/10</span>
             </div>
+            <button
+              onClick={() => setHistoryOpen(true)}
+              className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 flex items-center justify-center text-slate-400 hover:text-white transition-all"
+              title="我的检测历史"
+            >
+              <BarChart3 className="w-4 h-4" />
+            </button>
             <button
               onClick={() => setChangelogOpen(true)}
               className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 flex items-center justify-center text-slate-400 hover:text-white transition-all"
@@ -2125,6 +2134,11 @@ function App() {
       <ChangelogModal
         isOpen={changelogOpen}
         onClose={() => setChangelogOpen(false)}
+      />
+      <HistoryDashboard
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onGoDetect={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
       />
       <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>
