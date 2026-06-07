@@ -655,6 +655,7 @@ function App() {
   const [streamingProgress, setStreamingProgress] = useState({ generated: 0, estimated: 0 });
   const [streamingStatus, setStreamingStatus] = useState(null); // 'streaming' | 'reconnecting' | null
   const [streamingError, setStreamingError] = useState(null);
+  const [reconnectInfo, setReconnectInfo] = useState(null); // { attempt, max_attempts, reason }
   // 逐段流式状态
   const [streamingParagraphs, setStreamingParagraphs] = useState([]);
   const [currentStreamingParaIdx, setCurrentStreamingParaIdx] = useState(null);
@@ -902,6 +903,7 @@ function App() {
       sseClientRef.current = null;
     }
     setStreamingStatus(null);
+    setReconnectInfo(null);
   };
 
   const handleStopRewrite = async () => {
@@ -1018,6 +1020,7 @@ function App() {
     setStreamingParagraphs(paragraphs.map(p => ({ ...p, rewritten_text: p.text, rewritten: false, _streaming: false })));
     setCurrentStreamingParaIdx(null);
     setStreamingStatus('streaming');
+    setReconnectInfo(null);
     setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 200);
 
     const payload = {
@@ -1083,8 +1086,19 @@ function App() {
           setCurrentStreamingParaIdx(null);
           _cleanupStreaming();
           setRewriting(false);
+        } else if (eventType === 'reconnect_reset') {
+          setStreamingParagraphs(paragraphs.map(p => ({ ...p, rewritten_text: p.text, rewritten: false, _streaming: false }));
+          setCurrentStreamingParaIdx(null);
+          setStreamingProgress({ generated: 0, estimated: 0 });
+          setReconnectInfo({
+            attempt: data.attempt,
+            max_attempts: data.max_attempts,
+            reason: data.reason,
+          });
         } else if (eventType === 'reconnecting') {
           setStreamingStatus('reconnecting');
+        } else if (eventType === 'start' || eventType === 'paragraph_start' || eventType === 'token') {
+          if (reconnectInfo) setReconnectInfo(null);
         }
       },
       onError: (err) => {
@@ -1283,6 +1297,7 @@ function App() {
     setStreamingText("");
     setStreamingProgress({ generated: 0, estimated: 0 });
     setStreamingStatus('streaming');
+    setReconnectInfo(null);
     setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 200);
 
     const originalText = text;
@@ -1331,8 +1346,18 @@ function App() {
           setStreamingError(data.message || '未知错误');
           _cleanupStreaming();
           setRewriting(false);
+        } else if (eventType === 'reconnect_reset') {
+          setStreamingText("");
+          setStreamingProgress({ generated: 0, estimated: data.estimated_total_chars || 0 });
+          setReconnectInfo({
+            attempt: data.attempt,
+            max_attempts: data.max_attempts,
+            reason: data.reason,
+          });
         } else if (eventType === 'reconnecting') {
           setStreamingStatus('reconnecting');
+        } else if (eventType === 'start' || eventType === 'token') {
+          if (reconnectInfo) setReconnectInfo(null);
         }
       },
       onError: (err) => {
@@ -2109,6 +2134,17 @@ function App() {
                             </div>
                           </div>
                         </div>
+                        {reconnectInfo && (
+                          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 flex items-start gap-2">
+                            <WifiOff className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold">网络中断，已自动重连（第 {reconnectInfo.attempt}/{reconnectInfo.max_attempts} 次）</span>
+                              <span className="block mt-0.5 text-amber-400/80">
+                                原因: {reconnectInfo.reason || '连接丢失'} · 为避免内容重复，已清空并重头开始生成
+                              </span>
+                            </div>
+                          </div>
+                        )}
                         <div className="text-sm leading-relaxed h-[460px] overflow-y-auto pr-4 text-white font-medium whitespace-pre-wrap break-words">
                           {streamingText}
                           <span className="inline-block w-2 h-5 bg-indigo-400 ml-0.5 animate-pulse align-middle"></span>
@@ -2141,6 +2177,17 @@ function App() {
                         </span>
                       </div>
                     </div>
+                    {reconnectInfo && (
+                      <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 flex items-start gap-2">
+                        <WifiOff className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold">网络中断，已自动重连（第 {reconnectInfo.attempt}/{reconnectInfo.max_attempts} 次）</span>
+                          <span className="block mt-0.5 text-amber-400/80">
+                            原因: {reconnectInfo.reason || '连接丢失'} · 为避免内容重复，已清空并重头开始生成
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     <div className="space-y-3 max-h-[640px] overflow-y-auto pr-2">
                       {streamingParagraphs.map((para, idx) => (
                         <div

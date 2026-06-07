@@ -88,14 +88,28 @@ export function createSSEClient({
       if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempts += 1;
         const delay = RECONNECT_DELAY_BASE * Math.pow(2, reconnectAttempts - 1);
+
+        // 先发送 reset 事件，通知上层清空已有的增量内容（重连后后端会从头开始流，避免内容拼接会重复
+        onEvent && onEvent('reconnect_reset', {
+          attempt: reconnectAttempts,
+          max_attempts: MAX_RECONNECT_ATTEMPTS,
+          delay_ms: delay,
+          stream_id: currentStreamId,
+          reason: err?.message || 'connection lost',
+        });
+
         onEvent && onEvent('reconnecting', {
           attempt: reconnectAttempts,
           max_attempts: MAX_RECONNECT_ATTEMPTS,
           delay_ms: delay,
           stream_id: currentStreamId,
+          will_reset: true,
         });
+
         reconnectTimer = setTimeout(() => {
           if (!closedByUser) {
+            // 重建 AbortController，旧的已被中断
+            abortController = new AbortController();
             connect();
           }
         }, delay);
