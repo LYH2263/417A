@@ -1012,8 +1012,8 @@ function App() {
     setTimeout(() => document.getElementById('results-section')?.scrollIntoView({ behavior: 'smooth' }), 200);
 
     const payload = {
-      paragraphs: paragraphs.map((p, idx) => ({
-        id: idx,
+      paragraphs: paragraphs.map((p) => ({
+        id: p.id,
         text: p.text,
         should_rewrite: p.selected && !p.locked,
         locked: p.locked
@@ -1088,24 +1088,27 @@ function App() {
     sseClientRef.current = client;
   };
 
-  const handleParagraphAction = (index, action) => {
+  const handleParagraphAction = (paraId, action) => {
     if (action === 'revert') {
       setSelectiveRewriteResult(prev => {
         if (!prev) return prev;
-        const sorted = [...prev.paragraphs].sort((a, b) => a.id - b.id);
-        const target = sorted[index];
+        const resultById = {};
+        prev.paragraphs.forEach(p => { resultById[p.id] = p; });
+        const target = resultById[paraId];
         if (target) {
           target.rewritten_text = target.original_text;
           target.rewritten = false;
           target._reverted = true;
         }
-        const combinedText = sorted.map(p => p.rewritten_text).join('\n\n');
+        const combinedText = paragraphs
+          .map(srcPara => (resultById[srcPara.id] || srcPara).rewritten_text || srcPara.text)
+          .join('\n\n');
         return { ...prev, paragraphs: prev.paragraphs, combined_text: combinedText };
       });
     } else if (action === 'toggle') {
       setShowOriginalForParagraph(prev => ({
         ...prev,
-        [index]: !prev[index]
+        [paraId]: !prev[paraId]
       }));
     }
   };
@@ -2321,18 +2324,24 @@ function App() {
                       </div>
                     </div>
                     <div className="space-y-3 max-h-[640px] overflow-y-auto pr-2">
-                      {[...selectiveRewriteResult.paragraphs]
-                        .sort((a, b) => a.id - b.id)
-                        .map((para, idx) => (
-                          <ResultParagraphCard
-                            key={para.id}
-                            para={para}
-                            index={idx}
-                            showOriginal={!!showOriginalForParagraph[idx]}
-                            onRevert={handleParagraphAction}
-                            terminologyAnalysis={selectiveTerminologyAnalysis}
-                          />
-                        ))}
+                      {(() => {
+                        const resultById = {};
+                        selectiveRewriteResult.paragraphs.forEach(p => { resultById[p.id] = p; });
+                        return paragraphs.map((srcPara, idx) => {
+                          const para = resultById[srcPara.id];
+                          if (!para) return null;
+                          return (
+                            <ResultParagraphCard
+                              key={para.id}
+                              para={para}
+                              index={idx}
+                              showOriginal={!!showOriginalForParagraph[para.id]}
+                              onRevert={handleParagraphAction}
+                              terminologyAnalysis={selectiveTerminologyAnalysis}
+                            />
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
                 )}

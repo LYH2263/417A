@@ -227,8 +227,8 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
     if not payload.paragraphs:
         raise HTTPException(status_code=400, detail="No paragraphs provided")
     
-    sorted_paras = sorted(payload.paragraphs, key=lambda p: p.id)
-    all_texts = [p.text for p in sorted_paras]
+    ordered_paras = payload.paragraphs
+    all_texts = [p.text for p in ordered_paras]
     results = []
 
     try:
@@ -236,7 +236,7 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
     except Exception:
         protected_terms = []
     
-    for idx, para in enumerate(sorted_paras):
+    for idx, para in enumerate(ordered_paras):
         original_text = para.text
         
         if para.locked or not para.should_rewrite:
@@ -268,7 +268,7 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
             "locked": False
         })
     
-    rewritten_para_texts = [r["rewritten_text"] for r in sorted(results, key=lambda x: x["id"])]
+    rewritten_para_texts = [r["rewritten_text"] for r in results]
     combined_text = "\n\n".join(rewritten_para_texts)
     original_combined = "\n\n".join(all_texts)
     
@@ -1024,9 +1024,9 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
         raise HTTPException(status_code=400, detail="No paragraphs provided")
 
     stream_id = str(uuid.uuid4())
-    sorted_paras = sorted(payload.paragraphs, key=lambda p: p.id)
-    all_texts = [p.text for p in sorted_paras]
-    total_paragraphs = len(sorted_paras)
+    ordered_paras = payload.paragraphs
+    all_texts = [p.text for p in ordered_paras]
+    total_paragraphs = len(ordered_paras)
 
     try:
         protected_terms = get_all_terminology_terms()
@@ -1052,7 +1052,7 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
                 "estimated_total_chars": _estimate_total_chars("\n\n".join(all_texts)),
             })
 
-            for idx, para in enumerate(sorted_paras):
+            for idx, para in enumerate(ordered_paras):
                 if await request.is_disconnected() or is_aborted():
                     break
 
@@ -1132,14 +1132,13 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
                 })
 
             if is_aborted():
+                result_by_id = {r["id"]: r for r in results}
                 rewritten_para_texts = []
-                for r in sorted(results, key=lambda x: x["id"]):
-                    rewritten_para_texts.append(r["rewritten_text"])
-                # 补充未处理的段落用原文
-                handled_ids = {r["id"] for r in results}
-                for p in sorted_paras:
-                    if p.id not in handled_ids:
-                        rewritten_para_texts.insert(p.id, p.text)
+                for p in ordered_paras:
+                    if p.id in result_by_id:
+                        rewritten_para_texts.append(result_by_id[p.id]["rewritten_text"])
+                    else:
+                        rewritten_para_texts.append(p.text)
                 combined_text = "\n\n".join([t for t in rewritten_para_texts if t])
                 yield _sse_event("aborted", {
                     "stream_id": stream_id,
@@ -1148,7 +1147,7 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
                 })
                 return
 
-            rewritten_para_texts = [r["rewritten_text"] for r in sorted(results, key=lambda x: x["id"])]
+            rewritten_para_texts = [r["rewritten_text"] for r in results]
             combined_text = "\n\n".join(rewritten_para_texts)
             original_combined = "\n\n".join(all_texts)
 

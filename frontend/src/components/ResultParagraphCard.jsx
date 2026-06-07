@@ -52,7 +52,7 @@ export default function ResultParagraphCard({
           {isRewritten && (
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => onRevert && onRevert(index, 'toggle')}
+                onClick={() => onRevert && onRevert(para.id, 'toggle')}
                 className={`text-[10px] font-bold px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${
                   showOriginal
                     ? 'bg-slate-700 text-slate-300 border border-slate-600'
@@ -64,7 +64,7 @@ export default function ResultParagraphCard({
                 {showOriginal ? '改写后' : '原文'}
               </button>
               <button
-                onClick={() => onRevert && onRevert(index, 'revert')}
+                onClick={() => onRevert && onRevert(para.id, 'revert')}
                 className="text-[10px] font-bold px-2 py-1 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 flex items-center gap-1 transition-colors"
                 title="撤销本段改写"
               >
