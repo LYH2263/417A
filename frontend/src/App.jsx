@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff, HelpCircle, ScrollText, BarChart3 } from 'lucide-react';
+import { Upload, ShieldCheck, Zap, FileText, ChevronRight, Sparkles, RefreshCcw, CheckCircle, Download, FileDown, Layers, GitCompare, ArrowLeftRight, Clock, Circle, History, Eye, Gauge, AlertTriangle, Split, Info, Target, Timer, Scale, Lock, Unlock, GripVertical, Undo2, ListChecks, Shuffle, CheckSquare, Square, BookOpen, StopCircle, WifiOff, HelpCircle, ScrollText, BarChart3, Library, X } from 'lucide-react';
 import HistoryDashboard from './components/HistoryDashboard';
+import TerminologyDictionary from './components/TerminologyDictionary';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { computeWordDiff } from './utils/diff';
@@ -17,6 +18,7 @@ import changelogData from './data/changelog.json';
 import { useHealthCheck } from './hooks/useHealthCheck';
 import { SystemStatusIndicator } from './components/SystemStatusIndicator';
 import { ToastContainer } from './components/Toast';
+import { renderTextWithTerminologyHighlight } from './utils/terminologyHighlight';
 
 const API_BASE = "http://localhost:8417/api";
 
@@ -34,6 +36,129 @@ const credibilityMeta = {
 const VIRTUAL_LIST_THRESHOLD = 20;
 const PARAGRAPH_CARD_HEIGHT = 160;
 const VIRTUAL_OVERSCAN = 5;
+
+function TerminologyProtectionStatus({ analysis, source, onRevertModified }) {
+  const [showDetails, setShowDetails] = useState(false);
+  if (!analysis) return null;
+  const preservedCount = (analysis.preserved || []).length;
+  const modifiedCount = (analysis.modified || []).length;
+  const totalTerms = (analysis.protected_terms || []).length;
+
+  return (
+    <div className="relative">
+      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${
+        analysis.has_modified_terms
+          ? 'bg-red-500/10 border-red-500/30'
+          : preservedCount > 0
+          ? 'bg-emerald-500/10 border-emerald-500/30'
+          : 'bg-slate-800 border-slate-700'
+      }`}>
+        <button
+          onClick={() => setShowDetails(!showDetails)}
+          className="flex items-center gap-2 text-xs font-bold"
+        >
+          {analysis.has_modified_terms ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+          ) : preservedCount > 0 ? (
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+          ) : (
+            <Info className="w-3.5 h-3.5 text-slate-400" />
+          )}
+          <span className={analysis.has_modified_terms ? 'text-red-400' : preservedCount > 0 ? 'text-emerald-400' : 'text-slate-400'}>
+            {analysis.has_modified_terms
+              ? `${modifiedCount} 个术语被修改`
+              : preservedCount > 0
+              ? `${preservedCount}/${totalTerms} 术语已保护`
+              : '无受保护术语'}
+          </span>
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {showDetails && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="absolute right-0 top-full mt-2 z-50 w-80 bg-slate-950 border border-slate-700 rounded-xl p-4 shadow-2xl"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-white">术语保护状态</h4>
+              <button
+                onClick={() => setShowDetails(false)}
+                className="text-slate-500 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {(analysis.preserved || []).length > 0 && (
+              <div className="mb-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-xs font-bold text-emerald-400">已保护术语 ({preservedCount})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                  {analysis.preserved.slice(0, 20).map((t, i) => (
+                    <span
+                      key={i}
+                      className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                      title={t.category}
+                    >
+                      {t.term}
+                    </span>
+                  ))}
+                  {analysis.preserved.length > 20 && (
+                    <span className="text-[10px] text-slate-500">+{analysis.preserved.length - 20} 更多</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {(analysis.modified || []).length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                  <span className="text-xs font-bold text-red-400">被修改术语 ({modifiedCount})</span>
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {analysis.modified.map((t, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between gap-2 p-2 rounded-lg bg-red-500/5 border border-red-500/20"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold text-red-300 truncate">{t.term}</div>
+                        <div className="text-[10px] text-slate-500">
+                          {t.category} · 原文 {t.original_count} 次 → 改写 {t.rewritten_count} 次
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onRevertModified && onRevertModified(t, source)}
+                        className="flex-shrink-0 text-[10px] font-bold px-2 py-1 rounded-md bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 transition-colors flex items-center gap-1"
+                        title="一键回退该术语"
+                      >
+                        <Undo2 className="w-3 h-3" />
+                        回退
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(analysis.preserved || []).length === 0 && (analysis.modified || []).length === 0 && (
+              <div className="text-center py-4">
+                <Info className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                <p className="text-xs text-slate-500">本次改写未检测到受保护术语</p>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 function DiffView({ oldText, newText }) {
   const diff = useMemo(() => computeWordDiff(oldText, newText), [oldText, newText]);
@@ -454,6 +579,7 @@ function App() {
     consecutiveFailures,
     lastCheck,
     toasts,
+    addToast,
     removeToast,
     forceReconnect
   } = useHealthCheck();
@@ -489,6 +615,9 @@ function App() {
   const [tourOpen, setTourOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [terminologyOpen, setTerminologyOpen] = useState(false);
+  const [terminologyAnalysis, setTerminologyAnalysis] = useState(null);
+  const [selectiveTerminologyAnalysis, setSelectiveTerminologyAnalysis] = useState(null);
 
   useEffect(() => {
     const tourSeen = localStorage.getItem('paperwise_tour_seen');
@@ -554,6 +683,8 @@ function App() {
     setSelectedSectionId(null);
     setRewritingSectionId(null);
     setShowSectionOriginal({});
+    setTerminologyAnalysis(null);
+    setSelectiveTerminologyAnalysis(null);
     scrollToInput();
   };
 
@@ -685,6 +816,72 @@ function App() {
   const decreaseQuota = () => {
     if (quota > 0) {
       setQuota(prev => prev - 1);
+    }
+  };
+
+  const handleRevertModifiedTerm = (modifiedTerm, source) => {
+    const term = modifiedTerm.term;
+    if (source === 'rewrite' && rewriteResult) {
+      const currentText = rewriteResult.history.find(h => h.version === selectedVersionA)?.text || '';
+      const originalText = rewriteResult.original_text || text;
+      const revertedText = currentText.replace(new RegExp(term, 'gi'), (match) => {
+        const idx = originalText.toLowerCase().indexOf(term.toLowerCase());
+        if (idx !== -1) {
+          return originalText.substring(idx, idx + term.length);
+        }
+        return term;
+      });
+      const updatedHistory = rewriteResult.history.map(h =>
+        h.version === selectedVersionA ? { ...h, text: revertedText } : h
+      );
+      setRewriteResult({ ...rewriteResult, history: updatedHistory });
+      if (terminologyAnalysis) {
+        const newPreserved = [...(terminologyAnalysis.preserved || []), {
+          id: modifiedTerm.id,
+          term: term,
+          category: modifiedTerm.category,
+          description: modifiedTerm.description,
+          preserved_manually: true
+        }];
+        const newModified = (terminologyAnalysis.modified || []).filter(m => m.id !== modifiedTerm.id);
+        setTerminologyAnalysis({
+          ...terminologyAnalysis,
+          preserved: newPreserved,
+          modified: newModified,
+          has_modified_terms: newModified.length > 0
+        });
+      }
+      addToast({ type: 'success', title: `已恢复术语: ${term}` });
+    } else if (source === 'selective' && selectiveRewriteResult) {
+      const updatedParagraphs = selectiveRewriteResult.paragraphs.map(p => {
+        const newText = p.rewritten_text.replace(new RegExp(term, 'gi'), (match) => {
+          const idx = (p.original_text || '').toLowerCase().indexOf(term.toLowerCase());
+          if (idx !== -1) {
+            return (p.original_text || '').substring(idx, idx + term.length);
+          }
+          return term;
+        });
+        return { ...p, rewritten_text: newText };
+      });
+      const combinedText = [...updatedParagraphs].sort((a, b) => a.id - b.id).map(p => p.rewritten_text).join('\n\n');
+      setSelectiveRewriteResult({ ...selectiveRewriteResult, paragraphs: updatedParagraphs, combined_text: combinedText });
+      if (selectiveTerminologyAnalysis) {
+        const newPreserved = [...(selectiveTerminologyAnalysis.preserved || []), {
+          id: modifiedTerm.id,
+          term: term,
+          category: modifiedTerm.category,
+          description: modifiedTerm.description,
+          preserved_manually: true
+        }];
+        const newModified = (selectiveTerminologyAnalysis.modified || []).filter(m => m.id !== modifiedTerm.id);
+        setSelectiveTerminologyAnalysis({
+          ...selectiveTerminologyAnalysis,
+          preserved: newPreserved,
+          modified: newModified,
+          has_modified_terms: newModified.length > 0
+        });
+      }
+      addToast({ type: 'success', title: `已恢复术语: ${term}` });
     }
   };
 
@@ -853,6 +1050,12 @@ function App() {
             combined_text: data.combined_text,
             detection_after: data.detection_after
           });
+          if (data.terminology_analysis) {
+            setSelectiveTerminologyAnalysis(data.terminology_analysis);
+            if (data.terminology_analysis.has_modified_terms) {
+              addToast({ type: 'warning', title: `检测到 ${data.terminology_analysis.modified.length} 个术语被意外修改`, message: '请点击术语保护状态查看详情并一键回退' });
+            }
+          }
           setCurrentStreamingParaIdx(null);
           setShowOriginalForParagraph({});
           _cleanupStreaming();
@@ -1089,6 +1292,12 @@ function App() {
               { version: 1, label: '改写结果', text: finalText, detection: data.detection_after }
             ]
           });
+          if (data.terminology_analysis) {
+            setTerminologyAnalysis(data.terminology_analysis);
+            if (data.terminology_analysis.has_modified_terms) {
+              addToast({ type: 'warning', title: `检测到 ${data.terminology_analysis.modified.length} 个术语被意外修改`, message: '请点击术语保护状态查看详情并一键回退' });
+            }
+          }
           setSelectedVersionA(1);
           setSelectedVersionB(0);
           _cleanupStreaming();
@@ -1280,6 +1489,14 @@ function App() {
             <div className="text-xs text-slate-500 bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
               今日额度: <span className={quota > 3 ? "text-indigo-400" : "text-red-400"}>{quota}/10</span>
             </div>
+            <button
+              onClick={() => setTerminologyOpen(true)}
+              className="px-3 h-8 rounded-lg bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/30 hover:border-amber-500/50 flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition-all text-xs font-bold"
+              title="我的术语词典"
+            >
+              <Library className="w-3.5 h-3.5" />
+              术语词典
+            </button>
             <button
               onClick={() => setHistoryOpen(true)}
               className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 flex items-center justify-center text-slate-400 hover:text-white transition-all"
@@ -1579,7 +1796,14 @@ function App() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-slate-500">
                     <Layers className="w-4 h-4" />
-                    <span>术语锁定已开启</span>
+                    <button
+                      onClick={() => setTerminologyOpen(true)}
+                      className="flex items-center gap-1 text-amber-400 hover:text-amber-300 transition-colors"
+                      title="点击管理术语词典"
+                    >
+                      <Library className="w-3.5 h-3.5" />
+                      术语保护已启用
+                    </button>
                   </div>
                   {paragraphMode && (
                     <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
@@ -1678,6 +1902,15 @@ function App() {
                       <h2 className="text-2xl font-bold text-white mb-2">分析报告</h2>
                       <p className="text-slate-400 text-sm">基于 RoBERTa 及语义突发性检测引擎 · Bootstrap 置信区间</p>
                     </div>
+                    {(terminologyAnalysis || selectiveTerminologyAnalysis) && (
+                      <div className="flex items-center gap-2">
+                        <TerminologyProtectionStatus
+                          analysis={terminologyAnalysis || selectiveTerminologyAnalysis}
+                          source={terminologyAnalysis ? 'rewrite' : 'selective'}
+                          onRevertModified={handleRevertModifiedTerm}
+                        />
+                      </div>
+                    )}
                     <div className="flex items-center gap-6 flex-wrap">
                       <button
                         onClick={() => handleGenerateReport(rewriteResult ? 'rewrite' : (selectiveRewriteResult ? 'selective' : 'detect'))}
@@ -2001,8 +2234,13 @@ function App() {
                         </div>
                         <div className="text-sm leading-relaxed h-[460px] overflow-y-auto pr-4 flex-1">
                           {viewMode === 'single' ? (
-                            <div className="text-white font-medium whitespace-pre-wrap break-words">
-                              {getVersionText(selectedVersionA)}
+                            <div className="text-white font-medium">
+                              {renderTextWithTerminologyHighlight(
+                                getVersionText(selectedVersionA),
+                                (selectedVersionA === 1 || rewriteResult.history.find(h => h.version === selectedVersionA)?.label === '改写结果')
+                                  ? terminologyAnalysis
+                                  : null
+                              )}
                             </div>
                           ) : selectedVersionA === selectedVersionB ? (
                             <div className="text-slate-500 text-center py-20">
@@ -2085,6 +2323,7 @@ function App() {
                             index={idx}
                             showOriginal={!!showOriginalForParagraph[idx]}
                             onRevert={handleParagraphAction}
+                            terminologyAnalysis={selectiveTerminologyAnalysis}
                           />
                         ))}
                     </div>
@@ -2139,6 +2378,10 @@ function App() {
         isOpen={historyOpen}
         onClose={() => setHistoryOpen(false)}
         onGoDetect={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+      />
+      <TerminologyDictionary
+        isOpen={terminologyOpen}
+        onClose={() => setTerminologyOpen(false)}
       />
       <ToastContainer toasts={toasts} onRemove={removeToast} />
     </div>

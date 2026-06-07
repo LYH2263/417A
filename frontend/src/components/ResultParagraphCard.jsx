@@ -1,15 +1,18 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Lock, Undo2, Eye } from 'lucide-react';
+import { renderTextWithTerminologyHighlight } from '../utils/terminologyHighlight';
 
 export default function ResultParagraphCard({
   para,
   index,
   onRevert,
-  showOriginal
+  showOriginal,
+  terminologyAnalysis
 }) {
   const isRewritten = para.rewritten && !para.locked;
   const displayText = showOriginal && isRewritten ? para.original_text : para.rewritten_text;
+  const showHighlight = isRewritten && !showOriginal && terminologyAnalysis;
 
   return (
     <motion.div
@@ -71,11 +74,14 @@ export default function ResultParagraphCard({
             </div>
           )}
         </div>
-        <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${
+        <div className={`text-sm leading-relaxed ${
           isRewritten ? 'text-white' : 'text-slate-500'
         }`}>
-          {displayText}
-        </p>
+          {showHighlight
+            ? renderTextWithTerminologyHighlight(displayText, terminologyAnalysis)
+            : <span className="whitespace-pre-wrap break-words">{displayText}</span>
+          }
+        </div>
       </div>
     </motion.div>
   );

@@ -14,7 +14,7 @@ from datetime import datetime
 try:
     from app.parser import extract_text
     from app.detector import detect_ai_content, detect_ai_content_advanced
-    from app.rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
+    from app.rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
     from app.structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
     from app.pdf_report import generate_pdf_report
     from app.database import (
@@ -23,12 +23,20 @@ try:
         get_daily_usage,
         get_rewrite_level_distribution,
         get_ai_score_trend,
+        list_terminology,
+        get_terminology,
+        create_terminology,
+        update_terminology,
+        delete_terminology,
+        bulk_import_terminology,
+        get_all_terminology_terms,
+        TERMINOLOGY_CATEGORIES,
     )
 except ImportError:
     try:
         from .parser import extract_text
         from .detector import detect_ai_content, detect_ai_content_advanced
-        from .rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
+        from .rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
         from .structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from .pdf_report import generate_pdf_report
         from .database import (
@@ -37,11 +45,19 @@ except ImportError:
             get_daily_usage,
             get_rewrite_level_distribution,
             get_ai_score_trend,
+            list_terminology,
+            get_terminology,
+            create_terminology,
+            update_terminology,
+            delete_terminology,
+            bulk_import_terminology,
+            get_all_terminology_terms,
+            TERMINOLOGY_CATEGORIES,
         )
     except ImportError:
         from parser import extract_text
         from detector import detect_ai_content, detect_ai_content_advanced
-        from rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream
+        from rewriter import rewrite_text, rewrite_text_with_context, rewrite_text_stream, rewrite_text_with_context_stream, analyze_terminology_protection
         from structure_analyzer import analyze_and_score_sections, rewrite_section_content, adjust_section_indices
         from pdf_report import generate_pdf_report
         from database import (
@@ -50,6 +66,14 @@ except ImportError:
             get_daily_usage,
             get_rewrite_level_distribution,
             get_ai_score_trend,
+            list_terminology,
+            get_terminology,
+            create_terminology,
+            update_terminology,
+            delete_terminology,
+            bulk_import_terminology,
+            get_all_terminology_terms,
+            TERMINOLOGY_CATEGORIES,
         )
 
 app = FastAPI(title="Academic AIGC Helper API")
@@ -75,6 +99,19 @@ class AdvancedDetectPayload(BaseModel):
 class RewritePayload(BaseModel):
     text: str
     level: str = "medium"
+
+class TerminologyCreate(BaseModel):
+    term: str
+    category: str = "专有名词"
+    description: Optional[str] = None
+
+class TerminologyUpdate(BaseModel):
+    term: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+
+class TerminologyBulkImport(BaseModel):
+    items: List[Dict[str, Any]]
 
 class SelectiveParagraph(BaseModel):
     id: int
@@ -189,6 +226,11 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
     sorted_paras = sorted(payload.paragraphs, key=lambda p: p.id)
     all_texts = [p.text for p in sorted_paras]
     results = []
+
+    try:
+        protected_terms = get_all_terminology_terms()
+    except Exception:
+        protected_terms = []
     
     for idx, para in enumerate(sorted_paras):
         original_text = para.text
@@ -210,7 +252,8 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
             text=original_text,
             prev_context=prev_ctx,
             next_context=next_ctx,
-            level=payload.level
+            level=payload.level,
+            protected_terms=protected_terms
         )
         
         results.append({
@@ -223,9 +266,10 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
     
     rewritten_para_texts = [r["rewritten_text"] for r in sorted(results, key=lambda x: x["id"])]
     combined_text = "\n\n".join(rewritten_para_texts)
+    original_combined = "\n\n".join(all_texts)
     
     try:
-        detection_before = detect_ai_content("\n\n".join(all_texts))
+        detection_before = detect_ai_content(original_combined)
     except Exception:
         detection_before = None
     
@@ -233,6 +277,11 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
         detection_after = detect_ai_content(combined_text)
     except Exception:
         detection_after = None
+
+    try:
+        terminology_analysis = analyze_terminology_protection(original_combined, combined_text, protected_terms)
+    except Exception:
+        terminology_analysis = {"protected_terms": [], "preserved": [], "modified": [], "has_modified_terms": False}
     
     try:
         save_record(
@@ -248,7 +297,8 @@ async def rewrite_selective(payload: SelectiveRewritePayload):
         "paragraphs": results,
         "combined_text": combined_text,
         "detection_after": detection_after,
-        "detection_before": detection_before
+        "detection_before": detection_before,
+        "terminology_analysis": terminology_analysis
     }
 
 @app.post("/api/rewrite")
@@ -260,6 +310,11 @@ async def rewrite(payload: RewritePayload):
     max_retries = 3
     detection_after = None
     detection_before = None
+
+    try:
+        protected_terms = get_all_terminology_terms()
+    except Exception:
+        protected_terms = []
     
     try:
         detection_before = detect_ai_content(payload.text)
@@ -275,7 +330,7 @@ async def rewrite(payload: RewritePayload):
     })
     
     for i in range(max_retries):
-        current_text = rewrite_text(current_text, payload.level)
+        current_text = rewrite_text(current_text, payload.level, protected_terms=protected_terms)
         detection_after = detect_ai_content(current_text)
         
         history.append({
@@ -287,6 +342,11 @@ async def rewrite(payload: RewritePayload):
         
         if detection_after["overall_ai_score"] < 10:
             break
+
+    try:
+        terminology_analysis = analyze_terminology_protection(payload.text, current_text, protected_terms)
+    except Exception:
+        terminology_analysis = {"protected_terms": [], "preserved": [], "modified": [], "has_modified_terms": False}
     
     try:
         save_record(
@@ -304,7 +364,8 @@ async def rewrite(payload: RewritePayload):
         "detection_after": detection_after,
         "detection_before": detection_before,
         "iterations": i + 1,
-        "history": history
+        "history": history,
+        "terminology_analysis": terminology_analysis
     }
 
 @app.get("/")
@@ -730,6 +791,11 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
     original_text = payload.text
     estimated_total = _estimate_total_chars(original_text)
 
+    try:
+        protected_terms = get_all_terminology_terms()
+    except Exception:
+        protected_terms = []
+
     # 注册流状态
     _stream_registry[stream_id] = {
         "aborted": False,
@@ -752,7 +818,8 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
             async for chunk in rewrite_text_stream(
                 text=original_text,
                 level=payload.level,
-                is_aborted=is_aborted
+                is_aborted=is_aborted,
+                protected_terms=protected_terms
             ):
                 if await request.is_disconnected():
                     print(f"[SSE] 客户端已断开: {stream_id}")
@@ -789,6 +856,11 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
                 detection_after = None
 
             try:
+                terminology_analysis = analyze_terminology_protection(original_text, accumulated, protected_terms)
+            except Exception:
+                terminology_analysis = {"protected_terms": [], "preserved": [], "modified": [], "has_modified_terms": False}
+
+            try:
                 save_record(
                     operation_type="rewrite",
                     original_ai_score=detection_before.get("overall_ai_score") if detection_before else None,
@@ -804,6 +876,7 @@ async def rewrite_stream(payload: StreamRewritePayload, request: Request):
                 "generated_chars": len(accumulated),
                 "detection_after": detection_after,
                 "detection_before": detection_before,
+                "terminology_analysis": terminology_analysis,
             })
 
         except Exception as e:
@@ -861,6 +934,11 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
     sorted_paras = sorted(payload.paragraphs, key=lambda p: p.id)
     all_texts = [p.text for p in sorted_paras]
     total_paragraphs = len(sorted_paras)
+
+    try:
+        protected_terms = get_all_terminology_terms()
+    except Exception:
+        protected_terms = []
 
     _stream_registry[stream_id] = {
         "aborted": False,
@@ -924,6 +1002,7 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
                     next_context=next_ctx,
                     level=payload.level,
                     is_aborted=is_aborted,
+                    protected_terms=protected_terms,
                 ):
                     if await request.is_disconnected() or is_aborted():
                         break
@@ -978,17 +1057,23 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
 
             rewritten_para_texts = [r["rewritten_text"] for r in sorted(results, key=lambda x: x["id"])]
             combined_text = "\n\n".join(rewritten_para_texts)
+            original_combined = "\n\n".join(all_texts)
 
             detection_after = None
             detection_before = None
             try:
-                detection_before = detect_ai_content("\n\n".join(all_texts))
+                detection_before = detect_ai_content(original_combined)
             except Exception:
                 detection_before = None
             try:
                 detection_after = detect_ai_content(combined_text)
             except Exception:
                 detection_after = None
+
+            try:
+                terminology_analysis = analyze_terminology_protection(original_combined, combined_text, protected_terms)
+            except Exception:
+                terminology_analysis = {"protected_terms": [], "preserved": [], "modified": [], "has_modified_terms": False}
 
             try:
                 save_record(
@@ -1006,6 +1091,7 @@ async def rewrite_selective_stream(payload: SelectiveRewritePayload, request: Re
                 "combined_text": combined_text,
                 "detection_after": detection_after,
                 "detection_before": detection_before,
+                "terminology_analysis": terminology_analysis,
             })
 
         except Exception as e:
@@ -1112,6 +1198,103 @@ async def get_history_stats(days: Optional[int] = None):
             "distribution": distribution,
             "daily_usage": daily,
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/terminology/categories")
+async def get_terminology_categories():
+    return {"categories": TERMINOLOGY_CATEGORIES}
+
+
+@app.get("/api/terminology")
+async def api_list_terminology(category: Optional[str] = None, search: Optional[str] = None):
+    try:
+        items = list_terminology(category=category, search=search)
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/terminology/{term_id}")
+async def api_get_terminology(term_id: int):
+    try:
+        item = get_terminology(term_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="术语不存在")
+        return item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/terminology")
+async def api_create_terminology(payload: TerminologyCreate):
+    if not payload.term or not payload.term.strip():
+        raise HTTPException(status_code=400, detail="术语内容不能为空")
+    try:
+        term_id = create_terminology(
+            term=payload.term.strip(),
+            category=payload.category or "专有名词",
+            description=payload.description
+        )
+        return {"success": True, "id": term_id}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/terminology/{term_id}")
+async def api_update_terminology(term_id: int, payload: TerminologyUpdate):
+    try:
+        term = payload.term.strip() if payload.term else None
+        if term == "":
+            raise HTTPException(status_code=400, detail="术语内容不能为空")
+        success = update_terminology(
+            term_id=term_id,
+            term=term,
+            category=payload.category,
+            description=payload.description
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="术语不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/terminology/{term_id}")
+async def api_delete_terminology(term_id: int):
+    try:
+        success = delete_terminology(term_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="术语不存在")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/terminology/bulk-import")
+async def api_bulk_import_terminology(payload: TerminologyBulkImport):
+    try:
+        result = bulk_import_terminology(payload.items)
+        return {"success": True, **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/terminology/analyze")
+async def api_analyze_terminology(original_text: str, rewritten_text: str):
+    try:
+        terms = get_all_terminology_terms()
+        result = analyze_terminology_protection(original_text, rewritten_text, terms)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

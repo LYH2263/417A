@@ -178,6 +178,7 @@ export function useHealthCheck() {
     consecutiveFailures,
     lastCheck,
     toasts,
+    addToast,
     removeToast,
     forceReconnect,
     checkHealth

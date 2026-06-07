@@ -88,11 +88,12 @@ def _simulated_rewrite(text: str) -> str:
             
     return " ".join(rewritten_words)
 
-def rewrite_text_with_context(text: str, prev_context: str = "", next_context: str = "", level: str = "medium"):
+def rewrite_text_with_context(text: str, prev_context: str = "", next_context: str = "", level: str = "medium", protected_terms: Optional[List[Dict[str, Any]]] = None):
     """
     Rewrites a single paragraph with adjacent paragraph context for cohesion.
     Only the target paragraph is rewritten; context is used for reference only.
     Levels: low, medium, high
+    protected_terms: 用户自定义术语词典，格式为 [{"term": "xxx", "category": "xxx", ...}, ...]
     """
     if not GROQ_API_KEY:
         print("⚠️ 未配置 GROQ_API_KEY，切换到降级方案（模拟改写）")
@@ -114,6 +115,16 @@ def rewrite_text_with_context(text: str, prev_context: str = "", next_context: s
 
     context_block = "\n\n".join(context_parts) if context_parts else ""
 
+    terms_block = ""
+    if protected_terms and len(protected_terms) > 0:
+        term_list = "\n".join([f'- "{t["term"]}" ({t.get("category", "专有名词")})' for t in protected_terms])
+        terms_block = f"""
+CRITICAL - USER CUSTOM TERMINOLOGY (ABSOLUTELY NO MODIFICATION):
+The following terms and phrases are protected by the user and MUST be preserved EXACTLY as they appear. Do NOT paraphrase, translate, abbreviate, or alter them in any way.
+
+{term_list}
+"""
+
     system_prompt = f"""You are a professional academic editor specialized in reducing AIGC (AI-Generated Content) detection rates while maintaining extreme academic rigors.
 
 Your Task: {instruction}
@@ -127,6 +138,7 @@ STRICT CONSTRAINTS:
 6. Improve the 'human-like' qualities: use varied sentence lengths, appropriate transitional phrases, and a natural academic style.
 7. Pay attention to contextual cohesion with the provided adjacent paragraphs. Use transitions naturally so the rewritten paragraph flows well with its neighbors.
 8. ONLY output the rewritten target paragraph. Do NOT include the context paragraphs, do NOT add any labels or markers.
+{terms_block}
 
 {context_block}
 
@@ -165,10 +177,11 @@ OUTPUT: Provide ONLY the rewritten text of the target paragraph, no explanations
         return _simulated_rewrite(text)
 
 
-def rewrite_text(text: str, level: str = "medium"):
+def rewrite_text(text: str, level: str = "medium", protected_terms: Optional[List[Dict[str, Any]]] = None):
     """
     Rewrites academic text using Groq API while preserving technical terms and structure.
     Levels: low, medium, high
+    protected_terms: 用户自定义术语词典，格式为 [{"term": "xxx", "category": "xxx", ...}, ...]
     """
     
     if not GROQ_API_KEY:
@@ -182,6 +195,16 @@ def rewrite_text(text: str, level: str = "medium"):
     }
     
     instruction = prompts.get(level, prompts["medium"])
+
+    terms_block = ""
+    if protected_terms and len(protected_terms) > 0:
+        term_list = "\n".join([f'- "{t["term"]}" ({t.get("category", "专有名词")})' for t in protected_terms])
+        terms_block = f"""
+CRITICAL - USER CUSTOM TERMINOLOGY (ABSOLUTELY NO MODIFICATION):
+The following terms and phrases are protected by the user and MUST be preserved EXACTLY as they appear. Do NOT paraphrase, translate, abbreviate, or alter them in any way.
+
+{term_list}
+"""
     
     system_prompt = f"""You are a professional academic editor specialized in reducing AIGC (AI-Generated Content) detection rates while maintaining extreme academic rigors.
     
@@ -194,6 +217,7 @@ def rewrite_text(text: str, level: str = "medium"):
     4. DO NOT change experimental data, numbers, or specific results.
     5. Maintain the original meaning and logical structure of the argument.
     6. Improve the 'human-like' qualities: use varied sentence lengths, appropriate transitional phrases, and a natural academic style.
+    {terms_block}
     
     OUTPUT: Provide ONLY the rewritten text, no explanations, no preamble, and no 'Here is the rewritten text' message."""
 
@@ -230,7 +254,7 @@ def rewrite_text(text: str, level: str = "medium"):
         return _simulated_rewrite(text)
 
 
-def _build_system_prompt(level: str, prev_context: str = "", next_context: str = "") -> str:
+def _build_system_prompt(level: str, prev_context: str = "", next_context: str = "", protected_terms: Optional[List[Dict[str, Any]]] = None) -> str:
     """构建 system prompt，供同步和流式调用共用"""
     prompts = {
         "low": "Perform slight synonym replacement and minor sentence restructuring to improve flow while maintaining the original tone.",
@@ -245,6 +269,16 @@ def _build_system_prompt(level: str, prev_context: str = "", next_context: str =
     if next_context:
         context_parts.append(f"[Next paragraph (for context only, do NOT rewrite or include in output)]:\n{next_context}")
     context_block = "\n\n".join(context_parts) if context_parts else ""
+
+    terms_block = ""
+    if protected_terms and len(protected_terms) > 0:
+        term_list = "\n".join([f'- "{t["term"]}" ({t.get("category", "专有名词")})' for t in protected_terms])
+        terms_block = f"""
+CRITICAL - USER CUSTOM TERMINOLOGY (ABSOLUTELY NO MODIFICATION):
+The following terms and phrases are protected by the user and MUST be preserved EXACTLY as they appear. Do NOT paraphrase, translate, abbreviate, or alter them in any way.
+
+{term_list}
+"""
 
     context_note = ""
     if prev_context or next_context:
@@ -263,6 +297,7 @@ STRICT CONSTRAINTS:
 4. DO NOT change experimental data, numbers, or specific results.
 5. Maintain the original meaning and logical structure of the argument.
 6. Improve the 'human-like' qualities: use varied sentence lengths, appropriate transitional phrases, and a natural academic style.
+{terms_block}
 {context_note}
 
 {context_block}"""
@@ -294,9 +329,9 @@ async def _simulated_async_stream(
         await asyncio.sleep(delay)
 
 
-def _build_chat_payload(text: str, level: str, prev_context: str = "", next_context: str = "") -> dict:
+def _build_chat_payload(text: str, level: str, prev_context: str = "", next_context: str = "", protected_terms: Optional[List[Dict[str, Any]]] = None) -> dict:
     """构建 Groq API 请求 payload，同步/流式共用"""
-    system_prompt = _build_system_prompt(level, prev_context, next_context)
+    system_prompt = _build_system_prompt(level, prev_context, next_context, protected_terms)
     user_content = f"[Target paragraph to rewrite]:\n{text}" if (prev_context or next_context) else text
     return {
         "model": MODEL_NAME,
@@ -313,7 +348,8 @@ def _build_chat_payload(text: str, level: str, prev_context: str = "", next_cont
 async def rewrite_text_stream(
     text: str,
     level: str = "medium",
-    is_aborted: Optional[Callable[[], bool]] = None
+    is_aborted: Optional[Callable[[], bool]] = None,
+    protected_terms: Optional[List[Dict[str, Any]]] = None
 ) -> AsyncGenerator[str, None]:
     """
     流式改写学术文本，逐 token yield 改写结果
@@ -330,7 +366,7 @@ async def rewrite_text_stream(
         "Content-Type": "application/json",
         "Accept": "text/event-stream"
     }
-    payload = _build_chat_payload(text, level)
+    payload = _build_chat_payload(text, level, protected_terms=protected_terms)
 
     try:
         print(f"🔄 正在调用 Groq API（流式改写），模型: {MODEL_NAME}")
@@ -386,7 +422,8 @@ async def rewrite_text_with_context_stream(
     prev_context: str = "",
     next_context: str = "",
     level: str = "medium",
-    is_aborted: Optional[Callable[[], bool]] = None
+    is_aborted: Optional[Callable[[], bool]] = None,
+    protected_terms: Optional[List[Dict[str, Any]]] = None
 ) -> AsyncGenerator[str, None]:
     """
     带上下文的流式改写，逐 token yield
@@ -402,7 +439,7 @@ async def rewrite_text_with_context_stream(
         "Content-Type": "application/json",
         "Accept": "text/event-stream"
     }
-    payload = _build_chat_payload(text, level, prev_context, next_context)
+    payload = _build_chat_payload(text, level, prev_context, next_context, protected_terms)
 
     try:
         print(f"🔄 正在调用 Groq API（上下文流式改写），模型: {MODEL_NAME}")
@@ -450,3 +487,70 @@ async def rewrite_text_with_context_stream(
         print(f"❌ Groq API 流式调用失败: {str(e)}，启动降级方案")
         async for chunk in _simulated_async_stream(text, is_aborted=is_aborted):
             yield chunk
+
+
+def _find_all_occurrences(text: str, term: str) -> List[Dict[str, Any]]:
+    """找出术语在文本中所有出现的位置，忽略大小写"""
+    if not text or not term:
+        return []
+    occurrences = []
+    pattern = re.compile(re.escape(term), re.IGNORECASE)
+    for match in pattern.finditer(text):
+        occurrences.append({
+            "start": match.start(),
+            "end": match.end(),
+            "text": match.group()
+        })
+    return occurrences
+
+
+def analyze_terminology_protection(
+    original_text: str,
+    rewritten_text: str,
+    protected_terms: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """
+    分析术语保护状态
+    """
+    if not protected_terms:
+        protected_terms = []
+
+    preserved = []
+    modified = []
+
+    for term_info in protected_terms:
+        term = term_info.get("term", "")
+        if not term:
+            continue
+
+        original_positions = _find_all_occurrences(original_text, term)
+        rewritten_positions = _find_all_occurrences(rewritten_text, term)
+
+        original_count = len(original_positions)
+        rewritten_count = len(rewritten_positions)
+
+        result_item = {
+            "id": term_info.get("id"),
+            "term": term,
+            "category": term_info.get("category", "专有名词"),
+            "description": term_info.get("description"),
+            "original_positions": original_positions,
+            "rewritten_positions": rewritten_positions,
+            "original_count": original_count,
+            "rewritten_count": rewritten_count
+        }
+
+        if original_count > 0 and rewritten_count >= original_count:
+            preserved.append(result_item)
+        elif original_count > 0:
+            modified.append(result_item)
+
+    return {
+        "protected_terms": [
+            {"id": t.get("id"), "term": t.get("term"), "category": t.get("category", "专有名词"), "description": t.get("description")}
+            for t in protected_terms
+        ],
+        "preserved": preserved,
+        "modified": modified,
+        "has_modified_terms": len(modified) > 0
+    }
